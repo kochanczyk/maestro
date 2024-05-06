@@ -1,0 +1,8 @@
+PyYAML==6.0.1
+click==8.1.7
+numpy==1.26.4
+opencv_python==4.9.0.80
+pandas==2.2.2
+psutil==5.9.5
+tifffile==2023.9.26
+tqdm==4.66.1
