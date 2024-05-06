@@ -1,0 +1,30 @@
+Observables:
+    DigitalPhaseContrast:  dpc
+    Brightfield:           brightfield  
+    HOECHST33258:          hoechst
+    Alexa488:              cellevent
+    PropidiumIodide:       pi 
+
+Stitching:
+    downscale:     False
+    tile_overlap:  3%
+
+Normalization:
+    dpc:            -10,  *7
+    brightfield:  -6000,  *1.25
+    hoechst:       -610, *25
+    pi:            -180, *42
+    cellevent:    -2000, *11
+
+Remixes:
+    downscale: True
+    multi_channel:
+        - hoechst{blue} + pi{yellow}
+        - hoechst{blue} + cellevent{red}
+        - hoechst{blue} + pi{yellow} + cellevent{red}
+    single_channel:
+        - dpc
+        - brightfield
+        - hoechst
+        - cellevent
+        - pi
