@@ -1,0 +1,3 @@
+[MESSAGES CONTROL]
+disable=missing-docstring
+generated-members=cv2
