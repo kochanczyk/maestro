@@ -106,6 +106,7 @@ MOVIES_FOLDER_BASE_NAME = 'Movies'
 TIMESTAMP_SUFFIX = '--timestamped'
 
 CONVERT_EXE_PATH = Path('/usr/bin/convert')
+MOGRIFY_EXE_PATH = Path('/usr/bin/mogrify')
 
 XVFB_EXE_PATH = Path('/usr/bin/xvfb-run')
 XVFB_SERVER_NUMS = set(range(11, 91))
@@ -125,14 +126,16 @@ CLICK_EXISTING_FOLDER_PATH_TYPE = click.Path(exists=True, file_okay=False, dir_o
 
 TQDM_STYLE = {'bar_format': '{desc} {percentage:3.0f}% {postfix}'}
 
-CONVERT_EXE_PATH_S, XVFB_EXE_PATH_S, FIJI_EXE_PATH_S, FIJI_SCRIPT_BASE_PATH_S, FFMPEG_EXE_PATH_S = \
+CONVERT_EXE_PATH_S, MOGRIFY_EXE_PATH_S, XVFB_EXE_PATH_S, \
+FIJI_EXE_PATH_S, FIJI_SCRIPT_BASE_PATH_S, FFMPEG_EXE_PATH_S = \
 map(lambda p: str(p.absolute()), [
-CONVERT_EXE_PATH  , XVFB_EXE_PATH  , FIJI_EXE_PATH  , FIJI_SCRIPT_BASE_PATH  , FFMPEG_EXE_PATH
+CONVERT_EXE_PATH  , MOGRIFY_EXE_PATH,   XVFB_EXE_PATH  , \
+FIJI_EXE_PATH  , FIJI_SCRIPT_BASE_PATH  , FFMPEG_EXE_PATH
 ])
 
 assert CONVERT_EXE_PATH.exists()
+assert MOGRIFY_EXE_PATH.exists()
 assert FFMPEG_EXE_PATH.exists()
-assert CONVERT_EXE_PATH.exists()
 assert XVFB_EXE_PATH.exists()
 assert FIJI_EXE_PATH.exists()
 
@@ -886,6 +889,7 @@ def encode_movies(
 
 def _place_image_files_in_their_respective_well_folders(
     operetta_images_folder: Path,
+    abolish_internal_compression: bool = True,
     tolerate_extra_files: bool = False,
     retain_original_files: bool = False,
 ) -> List[Path]:
@@ -963,6 +967,13 @@ def _place_image_files_in_their_respective_well_folders(
             assert image_file.exists()
             transfer_file(image_file, dest_dir_path)
 
+            if abolish_internal_compression:
+                image_file_path = dest_dir_path / image_file
+                assert image_file_path.exists()
+                compress_args = ['-compress', 'none']
+                image_file_path_s = str(image_file_path.absolute())
+                cmd = [MOGRIFY_EXE_PATH_S, *compress_args, image_file_path_s]
+                sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True)
 
     wells_folders_paths = list(sorted([
         operetta_images_folder_path / assemble_well_folder_name_(row, col)
@@ -1358,7 +1369,7 @@ def remaster(
     # image pre-processing
     if before:
         if 'fix_single_pixel_images' in before:
-            _check(operetta_export_folder_path, fix_single_pixel_images=True)
+            _check(operetta_export_folder_path, fix_single_pixel_and_illegible_images=True)
         if select_best_focus_planes.__name__ in before:
             select_best_focus_planes(operetta_export_folder_path)
 
@@ -1635,7 +1646,7 @@ commands.add_command(remaster)
 
 def _check(
     operetta_export_folder: Path,
-    fix_single_pixel_images: bool = False,
+    fix_single_pixel_and_illegible_images: bool = False,
 ) -> list:
 
     operetta_export_folder_path = Path(operetta_export_folder)
@@ -1656,7 +1667,7 @@ def _check(
 
     if len(images_not_in_layout) > 0:
         n_absent = len(images_not_in_layout)
-        print(f"Warning: There are {n_absent} images not described in the layout metadata!")
+        print(f"Warning: There are {n_absent} image(s) not described in the layout metadata!")
 
     shape_counts = dict(Counter(image_shapes.values()))
     assert len(shape_counts), "Could not determine the (most prevalent) image shape."
@@ -1664,11 +1675,11 @@ def _check(
     if len(shape_counts) > 1:
         shape_counts_s = ', '.join([
             f"{shape[0]}x{shape[1]}: {count} images"
-            for shape, count in image_shapes.items()
+            for shape, count in shape_counts.items()
         ])
         print(f"Warning: There are multiple image shapes: {shape_counts_s}")
 
-        if fix_single_pixel_images:
+        if fix_single_pixel_and_illegible_images:
 
             # search for the largest-area shape
             correct_shape = (0, 0)
@@ -1685,7 +1696,7 @@ def _check(
             cv2.imwrite(str(empty_image_path.absolute()), empty_image.astype(np.uint16))
 
             for image_path, image_shape in tqdm(image_shapes.items(), desc='Info: Fixing ...', **TQDM_STYLE):
-                if image_shape[0]*image_shape[1] == 1:
+                if image_shape[0]*image_shape[1] in (0, 1):
                     image_path.rename(str(image_path.absolute()) + '.orig')
                     image_path.symlink_to(empty_image_path.name)
 
@@ -1696,7 +1707,7 @@ def _check(
 @click.option('--fix-single-pixel-images', is_flag=True, default=False, show_default=True)
 def check(
     operetta_export_folder: Path,
-    fix_single_pixel_images: bool = False,
+    fix_single_pixel_and_illegible_images: bool = False,
 ) -> list:
     '''
     Search for:
@@ -1704,7 +1715,7 @@ def check(
     (2) images devoid of respective entries in metadata.
     '''
 
-    return _check(operetta_export_folder, fix_single_pixel_images)
+    return _check(operetta_export_folder, fix_single_pixel_and_illegible_images)
 
 commands.add_command(check)
 
@@ -1734,11 +1745,13 @@ commands.add_command(folderize)
 
 @click.command()
 @click.argument('operetta_images_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
+@click.option('--abolish-internal-compression', is_flag=True, default=True, show_default=True)
 @click.option('--tolerate-extra-files', is_flag=True, default=False, show_default=True)
 @click.option('--retain-original-files', is_flag=True, default=False, show_default=True)
 @click.option('--retain-well-folders', is_flag=True, default=False, show_default=True)
 def archivize(
     operetta_images_folder: Path,
+    abolish_internal_compression: bool = True,
     tolerate_extra_files: bool = False,
     retain_original_files: bool = False,
     retain_well_folders: bool = False,
@@ -1752,8 +1765,11 @@ def archivize(
     compresses the folders.
     '''
 
+    operetta_images_folder_path = Path(operetta_images_folder)
+
     wells_folders_paths = _place_image_files_in_their_respective_well_folders(
-        operetta_images_folder=operetta_images_folder,
+        operetta_images_folder=operetta_images_folder_path,
+        abolish_internal_compression=abolish_internal_compression,
         tolerate_extra_files=tolerate_extra_files,
         retain_original_files=retain_original_files,
     )

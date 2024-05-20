@@ -214,12 +214,6 @@ Maestro may be used to get a glimpse of the exported data:
 Archives
 =========
 
-### Optional preliminary decompression
-TIFF files exported by Harmony are LZW-compressed internally. To enable efficient external compression, it is strongly advised to avert this internal compression, e.g., with ImageMagick:
-```
-    find . -name '*.tiff' -exec mogrify -compress none {} \;
-```
-
 ### Archiving
 
 One may call:
@@ -227,6 +221,8 @@ One may call:
     python maestro.py archivize PATH_TO_IMAGES_SUBFOLDER
 ```
 to obtain BZ2-compressed archives of images, one archive per well.
+
+By default, internal compression is abrogated (TIFF files exported by Harmony are internally compressed with LZW, which prevents a more efficient external compression).
 
 Note on compression ratio: bzip2, although slow, was experimentally checked to give the best compression ratio, exceeding that of zip and even xz at its "ultra" settings and extra-large dictionary, and is considered more suitable for long-term data storage than xz.
 
