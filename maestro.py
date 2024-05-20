@@ -1704,7 +1704,8 @@ def _check(
 
 @click.command()
 @click.argument('operetta_export_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
-@click.option('--fix-single-pixel-images', is_flag=True, default=False, show_default=True)
+@click.option('--fix-single-pixel-and-illegible-images', is_flag=True, default=False,
+    show_default=True)
 def check(
     operetta_export_folder: Path,
     fix_single_pixel_and_illegible_images: bool = False,

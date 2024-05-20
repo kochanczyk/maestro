@@ -84,7 +84,7 @@ Hint: Data transfer to external network locations turns out to be nearly twice f
 
 #### Problem addressed: Empty single-pixel images
 
-When the imager encounters exceptionally dark fields (especially in areas at or out of well borders; marked in red in Harmony's preview during image acquisition), their corresponding images are "empty", that is, contain just one black pixel. It is often useful to visually discern the fields that were "empty", and were expanded to normal tile dimensions, from the ordinary low-signal tiles. To draw diagonal lines on "empty" upscaled tiles, add option `--before fix_single_pixel_images` to maestro's command `remaster`.
+When the imager encounters exceptionally dark fields (especially in areas at or out of well borders; marked in red in Harmony's preview during image acquisition), their corresponding images are "empty", that is, contain just one black pixel. It is often useful to visually discern the fields that were "empty", and were expanded to normal tile dimensions, from the ordinary low-signal tiles. To draw diagonal lines on "empty" upscaled tiles, add option `--before fix_single_pixel_and_illegible_images` to maestro's command `remaster`.
 
 
 #### Problem addressed: Tilted focal plane
