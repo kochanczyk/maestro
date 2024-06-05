@@ -118,7 +118,7 @@ FFMPEG_EXE_PATH = Path('/usr/bin/ffmpeg')
 FFMPEG_OPTS_SILENCE = '-nostdin -loglevel error -y'.split()
 FFMPEG_OPTS_CODEC = '-vcodec libx264 -pix_fmt yuv420p -an'.split()  # -b:v 24M
 FFMPEG_OPTS_FILTERS = ''  # '-vf deshake'.split()  # -vf "crop=trunc(iw/2)*2:trunc(ih/2)*2"
-FFMPEG_OPTS_QUALITY = '-preset veryslow -crf 25'.split()
+FFMPEG_OPTS_QUALITY = '-preset medium -crf 28 -tune fastdecode'.split()
 FFMPEG_VIDSTAB_FILE_PATH_CORE = Path('/tmp/vidstab-')
 
 CLICK_EXISTING_FILE_PATH_TYPE   = click.Path(exists=True, file_okay=True,  dir_okay=False)
