@@ -83,7 +83,7 @@ def determine_fields_layout(
     fields_actual_count = len(set(map(tuple, well_images_layout[['field_ix', 'field_iy']].values)))
     if fields_expected_count != fields_actual_count:
         print(f"[{well_loc.row:02d}{well_loc.column:02d}] Warning:",
-              'Some fields are missing or the fields are not arranged in a rectangle!')
+              'Some fields are missing or fields are not arranged in a rectangle!')
 
     n_fields_x = len(well_images_layout['field_ix'].unique())
     n_fields_y = len(well_images_layout['field_iy'].unique())

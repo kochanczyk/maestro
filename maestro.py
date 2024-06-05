@@ -593,7 +593,8 @@ def remix_channels(
     well_remixes_folder_path: Path,
     downscale: bool = False,
     force: bool = False,
-    wells_info_for_annotation: pd.DataFrame | None = None
+    wells_info_for_annotation: pd.DataFrame | None = None,
+    is_part_of_timeseries: bool = False,
 ) -> None:
 
     assert stitches_folder_path.exists() and stitches_folder_path.is_dir()
@@ -700,7 +701,7 @@ def remix_channels(
                 wells_info_for_annotation['WellId'] == well_id
             ]
 
-            text = '\n'.join([
+            text = (' `\n\n' if is_part_of_timeseries else '') + '\n'.join([
                 f"{k.replace('WellId', 'WELL')}:  {well_info.iloc[0].to_dict()[k]}"
                 for k in well_info.columns
             ])
@@ -750,14 +751,14 @@ def _annotate_remixes_with_timestamps(
 
         cmd = [
             'convert',
-            '-size', '210x60', 'xc:none',
+            '-size', '360x90', 'xc:none',
             '-gravity', 'center',
-            '-font', 'Helvetica', '-pointsize', '60',
+            '-font', 'Helvetica', '-pointsize', '96',
             '-stroke', 'gray', '-strokewidth', '2',
             '-annotate', '0', time_min_s,
             '-background', 'none',
-            '-shadow', '210x5+0+0', '+repage',
-            '-font', 'Helvetica', '-pointsize', '60',
+            '-shadow', '360x5+0+0', '+repage',
+            '-font', 'Helvetica', '-pointsize', '96',
             '-stroke', 'none', '-fill', 'LightGray',
             '-annotate', '0', time_min_s,
             str(path.absolute()), '+swap',
@@ -1176,8 +1177,8 @@ def show_wells(
 ) -> None:
 
     wells_info = extract_wells_info(operetta_export_folder_path)
-    info_str ='\n'.join(wells_info['WellId']) if simple else str(wells_info)
-    print(info_str)
+    wells_info_str ='\n'.join(wells_info['WellId']) if simple else wells_info.to_string(max_cols=100)
+    print(wells_info_str)
 
 
 
@@ -1187,8 +1188,8 @@ def show_channels(
 ) -> None:
 
     channels_info = extract_channels_info(operetta_export_folder_path)
-    info_str = '\n'.join(channels_info['Name']) if simple else str(channels_info)
-    print(info_str)
+    channels_info_str = '\n'.join(channels_info['Name']) if simple else channels_info.to_string(max_colwidth=48)
+    print(channels_info_str)
 
 
 # -------------------------------------- user interface --------------------------------------------
@@ -1401,7 +1402,8 @@ def remaster(
         print(f"<html><body>{wells_info.to_html()}</body></html>", file=wells_info_file)
     with open(output_folder_path / 'WellsInfo.pkl', 'wb') as wells_info_archive:
         pickle.dump(wells_info, wells_info_archive)
-    print(80*'-' + '\n', wells_info, '\n' + 80*'-')
+    wells_info_str = wells_info.to_string(max_cols=100)
+    print(80*'-' + '\n', wells_info_str, '\n' + 80*'-')
 
 
     channels_info['Observable'] = channels_info['Name'].map(config['Observables'])
@@ -1420,7 +1422,8 @@ def remaster(
     channels_info_to_print['Correction'] = channels_info_to_print['Correction'].map(
         lambda c: c['Character']
     )
-    print(channels_info_to_print, '\n' + 80*'-')
+    channels_info_to_print_str = channels_info_to_print.to_string()
+    print(channels_info_to_print_str, '\n' + 80*'-')
 
     if time_interval is not None:
         time_interval_secs = time_interval.total_seconds()
@@ -1557,7 +1560,8 @@ def remaster(
                     downscale=remixing_downscale,
                     force=force_remix,
                     wells_info_for_annotation = \
-                        wells_info if annotate_remixes_with_wells_info else None
+                        wells_info if annotate_remixes_with_wells_info else None,
+                    is_part_of_timeseries=n_timepoints > 1
                 )
 
 
@@ -1599,7 +1603,8 @@ def remaster(
                     downscale=remixing_downscale,
                     force=force_remix,
                     wells_info_for_annotation = \
-                        wells_info if annotate_remixes_with_wells_info else None
+                        wells_info if annotate_remixes_with_wells_info else None,
+                    is_part_of_timeseries=n_timepoints > 1
                 )
 
 
