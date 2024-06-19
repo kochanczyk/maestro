@@ -309,15 +309,14 @@ def extract_channels_info(operetta_export_folder_path: Path) -> pd.DataFrame:
         # fix (1 of 3, remove colon)
         channel_json_text = channel_json_text.replace('Acapella:', 'Acapella')
 
-        # fix (2 of 3,remove spaces in channel name)
-        ch_name_match = re.search(r'(?<=ChannelName: )(?=.* *.*[^,])[A-Za-z0-9 ]+',
-                                  channel_json_text)
-        if ch_name_match:
+        # fix (2 of 3, remove spaces in channel name)
+        if ch_name_match := re.search(r'(?<=ChannelName: )(?=.* *.*[^,])[A-Za-z0-9_ ]+',
+                                      channel_json_text):
             ch_name = ch_name_match.group(0)
             channel_json_text = channel_json_text.replace(ch_name, ch_name.replace(' ', ''))
 
         # fix (3 of 3, add quotes)
-        channel_json_text = re.sub(r'(?P<id>[a-zA-Z]+[0-9]*)', '"\\1"', channel_json_text)
+        channel_json_text = re.sub(r'(?P<id>[A-Za-z]+[A-Za-z0-9_]*)', '"\\1"', channel_json_text)
 
         channel_json = json.loads(channel_json_text)
         channel_names[channel_number] = channel_json['ChannelName']
