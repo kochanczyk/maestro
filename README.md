@@ -194,6 +194,7 @@ Remixes:
 (an immunostaining from 2024-04-04 by Juan Alfonso Redondo Marin).
 
 
+
 Inspection
 ==========
 
@@ -224,7 +225,7 @@ to obtain BZ2-compressed archives of images, one archive per well.
 
 By default, internal compression is abrogated (TIFF files exported by Harmony are internally compressed with LZW, which prevents a more efficient external compression).
 
-Note on compression ratio: bzip2, although slow, was experimentally checked to give the best compression ratio, exceeding that of zip and even xz at its "ultra" settings and extra-large dictionary, and is considered more suitable for long-term data storage than xz.
+Note on compression ratio: bzip2, although slow, was experimentally checked to give the best compression ratio, exceeding that of zip and even xz (at its "ultra" settings and extra-large dictionary), and is considered more suitable for long-term data storage than xz.
 
 
 ### Unarchiving
@@ -240,7 +241,7 @@ The images are decompressed directly in the Images folder (not in any well subfo
 Limitations
 ===========
 
-The module has never been used to process Z-stacks.
+The module has never been used to process Z-stacks (except for a built-in capability to select best focused image in a Z stack).
 
 
 

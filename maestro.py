@@ -102,6 +102,7 @@ CORRTILES_FOLDER_BASE_NAME = 'Tiles'
 STITCHES_FOLDER_BASE_NAME = 'Stitches'
 REMIXES_FOLDER_BASE_NAME = 'Remixes'
 MOVIES_FOLDER_BASE_NAME = 'Movies'
+SHUTTLETRACKER_FOLDER_BASE_NAME = 'ST'
 
 TIMESTAMP_SUFFIX = '--timestamped'
 
@@ -1203,13 +1204,11 @@ def commands():
 @click.command()
 @click.argument('operetta_export_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
 @click.argument('config_file', type=CLICK_EXISTING_FILE_PATH_TYPE)
-@click.argument('remixes_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
-@click.argument('shuttletrackerable_folder', type=click.Path(exists=False))
+@click.argument('output_root_folder', type=click.Path(), default=Path.cwd())
 def trackerabilize(
     operetta_export_folder: Path,
     config_file: Path,
-    remixes_folder: Path,
-    shuttletrackerable_folder: Path,
+    output_root_folder: Path,
 ) -> None:
     '''
     Create a ShuttleTracker-compatible folder.
@@ -1221,12 +1220,24 @@ def trackerabilize(
     single_channel_remix_re = re.compile(r'Img_t[0-9]{4}--(?P<observable>[A-Za-z0-9]+)[^-_]*'
                                          r'\.(png|tiff?)')
 
+    operetta_export_folder_path = Path(operetta_export_folder)
+    output_root_folder_path = Path(output_root_folder)
+
+    assert operetta_export_folder_path.exists()
+
+
+    print("Info: Extracting metadata ... ", flush=True)
+
     # config file
     with open(Path(config_file), 'r', encoding='UTF-8') as config_file_io:
         config = yaml.load(config_file_io, Loader=yaml.FullLoader)
 
     # channels info
-    channels_info = extract_channels_info(Path(operetta_export_folder))
+    if not config['Remixes'] or not config['Remixes']['multi_channel']:
+        print("Error: No pseudocolors given in the config file!")
+        print("Hint: Provide a dummy multi-channel remix to define pseudocolors for all channels.")
+        return
+    channels_info: pd.DataFrame = extract_channels_info(operetta_export_folder_path)
     channels_info['Observable'] = channels_info['Name'].map(config['Observables'])
     observables_colors: dict = {}
     for overlay_s in config['Remixes']['multi_channel']:
@@ -1238,38 +1249,67 @@ def trackerabilize(
     channels_info['Color'] = channels_info['Observable'].map(observables_colors)
     colors = channels_info[~channels_info['Color'].isnull()].reset_index().set_index('Observable')
 
+    # wells info
+    wells_info: pd.DataFrame = extract_wells_info(operetta_export_folder_path)
+
     # time interval
-    delta_t = extract_time_interval(Path(operetta_export_folder))
+    delta_t = extract_time_interval(operetta_export_folder_path)
 
-    # source image files
-    image_files_paths = [
-        path for path in Path(remixes_folder).iterdir()
-        if path.is_file() and single_channel_remix_re.match(path.name) is not None
-    ]
+    print("Info: Extracting metadata ... done ", flush=True)
+    print("Info: Creating ShuttleTracker-viewable folders ... ", flush=True)
 
-    # observables in source file names
-    observables = dict(enumerate(set(
-        single_channel_remix_match.group('observable')
-        for path in image_files_paths
-        if (single_channel_remix_match := single_channel_remix_re.search(path.name)) is not None
-    )))
+    processed_folders_count = 0
+    for item in output_root_folder_path.iterdir():
+        if not item.is_dir():
+            continue
+        folder = item
+        if folder.name.endswith(REMIXES_FOLDER_BASE_NAME) and folder.name != REMIXES_FOLDER_BASE_NAME:
+            remixes_folder = folder
 
-    # make symlinks to image files
-    Path(shuttletrackerable_folder).mkdir(exist_ok=False, parents=True)
-    for obs_i, obs in observables.items():
-        obs_image_files_paths = [path for path in image_files_paths if obs in path.name]
-        for source_image_path in obs_image_files_paths:
-            symlink_name = source_image_path.name.replace(f"--{obs}", f"_ch{str(obs_i)}")
-            symlink_path = Path(shuttletrackerable_folder) / symlink_name
-            symlink_path.symlink_to(source_image_path.absolute())
+            # source image files
+            image_files_paths = [
+                path for path in Path(remixes_folder).iterdir()
+                if path.is_file() and single_channel_remix_re.match(path.name) is not None
+            ]
 
-    # create a metadata file
-    shuttletracker_metadata_path = Path(shuttletrackerable_folder) / 'shuttletracker_metadata.txt'
-    with open(shuttletracker_metadata_path, 'w', encoding='UTF-8') as st_file:
-        for obs_i, obs in observables.items():
-            print(f"channel {obs_i} {obs} {colors.loc[obs]['Color']} 8", file=st_file)
-        if delta_t is not None:
-            print(f"time_interval {delta_t.total_seconds()}", file=st_file)
+            # observables in source file names
+            observables = dict(enumerate(set(
+                single_channel_remix_match.group('observable')
+                for path in image_files_paths
+                if (single_channel_remix_match := single_channel_remix_re.search(path.name)) is not None
+            )))
+
+            # create output folder
+            well_id = remixes_folder.name.replace(f"-{REMIXES_FOLDER_BASE_NAME}", '')
+            shuttletrackerable_folder = output_root_folder_path / \
+                f"{well_id}-{SHUTTLETRACKER_FOLDER_BASE_NAME}"
+            shuttletrackerable_folder.mkdir(exist_ok=False, parents=True)
+
+            # make symlinks to image files
+            for obs_i, obs in observables.items():
+                obs_image_files_paths = [path for path in image_files_paths if obs in path.name]
+                for source_image_path in obs_image_files_paths:
+                    symlink_name = source_image_path.name.replace(f"--{obs}", f"_ch{str(obs_i)}")
+                    symlink_path = Path(shuttletrackerable_folder) / symlink_name
+                    symlink_path.symlink_to(source_image_path.absolute())
+
+            # create a metadata file
+            shuttletracker_metadata_path = Path(shuttletrackerable_folder) \
+                / 'shuttletracker_metadata.txt'
+            with open(shuttletracker_metadata_path, 'w', encoding='UTF-8') as st_file:
+                for obs_i, obs in observables.items():
+                    print(f"channel {obs_i} {obs} {colors.loc[obs]['Color']} 8", file=st_file)
+                if delta_t is not None:
+                    print(f"time_interval {delta_t.total_seconds()}", file=st_file)
+
+            print(f"Info: Symlinked images {shuttletrackerable_folder} -> {remixes_folder}.")
+
+            processed_folders_count += 1
+
+    print("Info: Creating ShuttleTracker-viewable folders ... done")
+    if processed_folders_count != len(wells_info):
+        print(f"Warning: Processed folder count: {processed_folders_count}, "
+              f"well count in metadata: {len(wells_info)}.")
 
 commands.add_command(trackerabilize)
 
