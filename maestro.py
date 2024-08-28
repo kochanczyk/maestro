@@ -430,6 +430,11 @@ def stitch_tiles(
     tile_images_paths_grouped_by_timepoint = _group_paths_by(tile_images_paths,
                                                              r't(?P<groupby>[0-9]{4})')
 
+    if n_fields_x == n_fields_y == 1:
+        require_no_zero_pixels_in_output_image = False
+        zero_pixels_in_output_image_retries_count = 0
+
+
     desc = f"[{well_id}] {STITCHES_FOLDER_BASE_NAME}: fijing: "
     for timepoint, tile_images_paths in tqdm(tile_images_paths_grouped_by_timepoint, desc=desc,
                                              **TQDM_STYLE):
@@ -438,62 +443,75 @@ def stitch_tiles(
         if not force and dst_file_path.exists() and dst_file_path.stat().st_size > 0:
             continue
 
-        n_trials_remaining = zero_pixels_in_output_image_retries_count
-        zero_pixel_counts = []
-        while n_trials_remaining > 0:
-            n_trials_remaining -= 1
+        src_tiles_folder = tile_images_paths[0].parent
 
-            fiji_script_path_s = FIJI_SCRIPT_BASE_PATH_S \
-                    + ''.join(random.choice(string.ascii_uppercase + string.digits)
-                              for _ in range(12)) + '.ij1'
-            substitutions = {
-                'TIMEPOINT': timepoint,
-                'N_FIELDS_X': n_fields_x,
-                'N_FIELDS_Y': n_fields_y,
-                'TILES_FOLDER': str(tile_images_paths[0].parent.absolute()),
-                'STITCHES_FOLDER': str(stitches_folder_path.absolute()),
-                'TILE_OVERLAP': tile_overlap + OPERETTA_EXTRA_TILE_OVERLAP,
-                'DOWNSCALE': str(downscale).lower(),
-            }
-            _generate_fiji_stitching_script(fiji_script_path_s, **substitutions)
+        if n_fields_x == n_fields_y == 1:
 
-            xvfb_server_nums_currently_in_use = {
-                int(arg[1:])
-                for process in psutil.process_iter()
-                for arg in process.cmdline()
-                if arg.startswith(':')
-                if process.name() == 'Xvfb'
-            }
-            xvfb_server_num = random.choice(
-                list(XVFB_SERVER_NUMS - xvfb_server_nums_currently_in_use)
-            )
+            src_file_path = src_tiles_folder / f"Img_t{int(timepoint):04d}_x0_y0.tif"
+            assert src_file_path.exists()
+            shutil.copy(src_file_path, dst_file_path)
 
-            try:
-                cmd = [
-                    XVFB_EXE_PATH_S, '--auto-servernum', f"--server-num={xvfb_server_num}",
-                    FIJI_EXE_PATH_S, '-macro', fiji_script_path_s
-                ]
-                sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True)
-            except:
-                with open(fiji_script_path_s, 'r', encoding='utf-8') as f:
-                    print(40*'- ')
-                    print(f.read())
-                    print(40*'- ')
-                raise
+        else:
 
-            Path(fiji_script_path_s).unlink()
 
-            if require_no_zero_pixels_in_output_image:
-                dst_file_path_s = str(dst_file_path.absolute())
-                reading_ok, dst_img = cv2.imreadmulti(dst_file_path_s, flags=cv2.IMREAD_UNCHANGED)
-                assert reading_ok
-                assert len(dst_img) > 0
-                if (zero_pixel_count := sum(sum(dst_img).ravel() == 0)) > 0:
-                    zero_pixel_counts.append(zero_pixel_count)
-                    z = same_zero_pixels_counts_consecutively_for_early_exit
-                    if len(zero_pixel_counts) >= z and len(set(zero_pixel_counts[-z:])) == 1:
-                        break
-                    continue  # retry
+            n_trials_remaining = zero_pixels_in_output_image_retries_count
+            zero_pixel_counts = []
+            while n_trials_remaining > 0:
+                n_trials_remaining -= 1
+
+                fiji_script_path_s = FIJI_SCRIPT_BASE_PATH_S \
+                        + ''.join(random.choice(string.ascii_uppercase + string.digits)
+                                for _ in range(12)) + '.ij1'
+                substitutions = {
+                    'TIMEPOINT': timepoint,
+                    'N_FIELDS_X': n_fields_x,
+                    'N_FIELDS_Y': n_fields_y,
+                    'TILES_FOLDER': str(src_tiles_folder.absolute()),
+                    'STITCHES_FOLDER': str(stitches_folder_path.absolute()),
+                    'TILE_OVERLAP': tile_overlap + OPERETTA_EXTRA_TILE_OVERLAP,
+                    'DOWNSCALE': str(downscale).lower(),
+                }
+                _generate_fiji_stitching_script(fiji_script_path_s, **substitutions)
+
+                xvfb_server_nums_currently_in_use = {
+                    int(arg[1:])
+                    for process in psutil.process_iter()
+                    for arg in process.cmdline()
+                    if arg.startswith(':')
+                    if process.name() == 'Xvfb'
+                }
+                xvfb_server_num = random.choice(
+                    list(XVFB_SERVER_NUMS - xvfb_server_nums_currently_in_use)
+                )
+
+                try:
+                    cmd = [
+                        XVFB_EXE_PATH_S, '--auto-servernum', f"--server-num={xvfb_server_num}",
+                        FIJI_EXE_PATH_S, '-macro', fiji_script_path_s
+                    ]
+                    sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True, timeout=3600)
+                except sp.TimeoutExpired:
+                    print('Fiji TIMED OUT while stitching!')
+                except:
+                    with open(fiji_script_path_s, 'r', encoding='utf-8') as f:
+                        print(40*'- ')
+                        print(f.read())
+                        print(40*'- ')
+                    raise
+
+                Path(fiji_script_path_s).unlink()
+
+                if require_no_zero_pixels_in_output_image:
+                    dst_file_path_s = str(dst_file_path.absolute())
+                    reading_ok, dst_img = cv2.imreadmulti(dst_file_path_s, flags=cv2.IMREAD_UNCHANGED)
+                    assert reading_ok
+                    assert len(dst_img) > 0
+                    if (zero_pixel_count := sum(sum(dst_img).ravel() == 0)) > 0:
+                        zero_pixel_counts.append(zero_pixel_count)
+                        z = same_zero_pixels_counts_consecutively_for_early_exit
+                        if len(zero_pixel_counts) >= z and len(set(zero_pixel_counts[-z:])) == 1:
+                            break
+                        continue  # retry
 
             if compress_output_tif:
                 dst_file_path_s = str(dst_file_path.absolute())
