@@ -118,7 +118,7 @@ FIJI_SCRIPT_BASE_PATH = Path('/tmp/stitch-')
 FFMPEG_EXE_PATH = Path('/usr/bin/ffmpeg')
 FFMPEG_OPTS_SILENCE = '-nostdin -loglevel error -y'.split()
 FFMPEG_OPTS_CODEC = '-vcodec libx264 -pix_fmt yuv420p -an'.split()  # -b:v 24M
-FFMPEG_OPTS_FILTERS = ''  # '-vf deshake'.split()  # -vf "crop=trunc(iw/2)*2:trunc(ih/2)*2"
+FFMPEG_OPTS_FILTERS = ''.split()  # '-vf deshake'.split()  # -vf "crop=trunc(iw/2)*2:trunc(ih/2)*2"
 FFMPEG_OPTS_QUALITY = '-preset medium -crf 28 -tune fastdecode'.split()
 FFMPEG_VIDSTAB_FILE_PATH_CORE = Path('/tmp/vidstab-')
 
@@ -862,15 +862,22 @@ def encode_movies(
             source_image_files_folder_path = well_remixes_folder_path
             input_image_filename_pattern = f"Img_t%04d--{obs_suffix}.png"
 
+        ffmpeg_opts_filters = FFMPEG_OPTS_FILTERS
+        example_image_path_s = str(next(source_image_files_folder_path.glob('*.png')))
+        example_image_shape = cv2.imread(example_image_path_s, cv2.IMREAD_UNCHANGED).shape
+        if max(example_image_shape) > 8192:
+            print("Warning: Images to be encoded are very large => halving movie width and height.")
+            ffmpeg_opts_filters.extend('-vf scale=trunc((iw/2)/2)*2:trunc((ih/2)/2)*2'.split())
+
         cmd = [
             FFMPEG_EXE_PATH_S,
             *FFMPEG_OPTS_SILENCE,
             '-r', movie_fps_s,
             '-f', 'image2',
             '-i', str((source_image_files_folder_path / input_image_filename_pattern).absolute()),
+            *ffmpeg_opts_filters,
             *FFMPEG_OPTS_CODEC,
             '-x264-params', f"keyint={3*movie_fps_i}:scenecut=0",
-            *FFMPEG_OPTS_FILTERS,
             *FFMPEG_OPTS_QUALITY,
             str(movie_file_path.absolute())
         ]
