@@ -557,7 +557,7 @@ def _derive_channels_composition(mixing_info: pd.DataFrame) -> dict:
         tiff_page, obs_norm = mixing_info[['TiffPage', 'Normalization']].iloc[0]
         if not pd.isna(obs_norm):
             normalization_re_match = normalization_re.match(obs_norm)
-            assert normalization_re_match is not None
+            assert normalization_re_match is not None, "Cannot parse the normalization parameters"
             sub, mul = map(normalization_re_match.group, ['sub', 'mul'])
         else:
             print(f"Warning: Missing normalization for '{mixing_info['Observable'].iloc[0]}'! "
@@ -1302,7 +1302,7 @@ def trackerabilize(
                 if delta_t is not None:
                     print(f"time_interval {delta_t.total_seconds()}", file=st_file)
 
-            print(f"Info: Symlinked images {shuttletrackerable_folder} -> {remixes_folder}.")
+            print(f"Info: Images from '{remixes_folder.name}' symlinked in '{shuttletrackerable_folder.name}'.")
 
             processed_folders_count += 1
 
@@ -1568,10 +1568,9 @@ def remaster(
 
         # ---- Remixes --------------------------------------------------------
 
-        if remix:
+        overlays_and_separates_infos = []  # for both remixing and encoding
 
-            overlays_and_separates_infos = []
-
+        if remix or encode:
 
             # -- single-channel remixes (aka "separates")
 
@@ -1592,17 +1591,18 @@ def remaster(
 
                 overlays_and_separates_infos.append(mixing_info)
 
-                remix_channels(
-                    well_id,
-                    mixing_info,
-                    well_stitches_folder_path,
-                    well_remixes_folder_path,
-                    downscale=remixing_downscale,
-                    force=force_remix,
-                    wells_info_for_annotation = \
-                        wells_info if annotate_remixes_with_wells_info else None,
-                    is_part_of_timeseries=n_timepoints > 1
-                )
+                if remix:
+                    remix_channels(
+                        well_id,
+                        mixing_info,
+                        well_stitches_folder_path,
+                        well_remixes_folder_path,
+                        downscale=remixing_downscale,
+                        force=force_remix,
+                        wells_info_for_annotation = \
+                            wells_info if annotate_remixes_with_wells_info else None,
+                        is_part_of_timeseries=n_timepoints > 1
+                    )
 
 
             # -- multi-channel remixes (aka "overlays")
@@ -1635,17 +1635,18 @@ def remaster(
 
                 overlays_and_separates_infos.append(mixing_info)
 
-                remix_channels(
-                    well_id,
-                    mixing_info,
-                    well_stitches_folder_path,
-                    well_remixes_folder_path,
-                    downscale=remixing_downscale,
-                    force=force_remix,
-                    wells_info_for_annotation = \
-                        wells_info if annotate_remixes_with_wells_info else None,
-                    is_part_of_timeseries=n_timepoints > 1
-                )
+                if remix:
+                    remix_channels(
+                        well_id,
+                        mixing_info,
+                        well_stitches_folder_path,
+                        well_remixes_folder_path,
+                        downscale=remixing_downscale,
+                        force=force_remix,
+                        wells_info_for_annotation = \
+                            wells_info if annotate_remixes_with_wells_info else None,
+                        is_part_of_timeseries=n_timepoints > 1
+                    )
 
 
             # -- optional cleanup
