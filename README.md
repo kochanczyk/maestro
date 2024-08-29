@@ -193,6 +193,11 @@ Remixes:
 ```
 (an immunostaining from 2024-04-04 by Juan Alfonso Redondo Marin).
 
+The four sections above are obligatory. You may also include optional sections:
+```
+Annotations:
+    font_size: 32pt  # default is 96pt
+```
 
 
 Inspection

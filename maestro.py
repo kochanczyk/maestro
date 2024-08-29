@@ -115,6 +115,8 @@ XVFB_SERVER_NUMS = set(range(11, 91))
 FIJI_EXE_PATH = Path('/opt/fiji/Fiji.app/ImageJ-linux64')
 FIJI_SCRIPT_BASE_PATH = Path('/tmp/stitch-')
 
+TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE = 96
+
 FFMPEG_EXE_PATH = Path('/usr/bin/ffmpeg')
 FFMPEG_OPTS_SILENCE = '-nostdin -loglevel error -y'.split()
 FFMPEG_OPTS_CODEC = '-vcodec libx264 -pix_fmt yuv420p -an'.split()  # -b:v 24M
@@ -435,7 +437,7 @@ def stitch_tiles(
         zero_pixels_in_output_image_retries_count = 0
 
 
-    desc = f"[{well_id}] {STITCHES_FOLDER_BASE_NAME}: fijing: "
+    desc = f"[{well_id}] {STITCHES_FOLDER_BASE_NAME}: {'fijing:' if n_fields_x*n_fields_y>1 else 'copying:'}"
     for timepoint, tile_images_paths in tqdm(tile_images_paths_grouped_by_timepoint, desc=desc,
                                              **TQDM_STYLE):
 
@@ -452,7 +454,6 @@ def stitch_tiles(
             shutil.copy(src_file_path, dst_file_path)
 
         else:
-
 
             n_trials_remaining = zero_pixels_in_output_image_retries_count
             zero_pixel_counts = []
@@ -492,6 +493,7 @@ def stitch_tiles(
                     sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True, timeout=3600)
                 except sp.TimeoutExpired:
                     print('Fiji TIMED OUT while stitching!')
+                    raise
                 except:
                     with open(fiji_script_path_s, 'r', encoding='utf-8') as f:
                         print(40*'- ')
@@ -513,12 +515,10 @@ def stitch_tiles(
                             break
                         continue  # retry
 
-            if compress_output_tif:
-                dst_file_path_s = str(dst_file_path.absolute())
-                cmd = [CONVERT_EXE_PATH_S, dst_file_path_s, '-compress', 'zip', dst_file_path_s]
-                sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True)
-
-            break
+        if compress_output_tif:
+            dst_file_path_s = str(dst_file_path.absolute())
+            cmd = [CONVERT_EXE_PATH_S, dst_file_path_s, '-compress', 'zip', dst_file_path_s]
+            sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True)
 
 
 
@@ -614,6 +614,7 @@ def remix_channels(
     force: bool = False,
     wells_info_for_annotation: pd.DataFrame | None = None,
     is_part_of_timeseries: bool = False,
+    annotation_font_size: int = TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE,
 ) -> None:
 
     assert stitches_folder_path.exists() and stitches_folder_path.is_dir()
@@ -728,19 +729,19 @@ def remix_channels(
             cmd = [
                 'convert',
                 '-size', '1800x1200+0+0', 'xc:none',
-                '-font', 'Helvetica', '-pointsize', '96',
+                '-font', 'Helvetica', '-pointsize', str(annotation_font_size),
                 '-stroke', 'gray', '-strokewidth', '2',
                 '-gravity', 'north-west',
                 '-annotate', '0', text,
                 '-background', 'none',
                 '-shadow', '1800x0+0+0', '+repage',
-                '-font', 'Helvetica', '-pointsize', '96',
+                '-font', 'Helvetica', '-pointsize', str(annotation_font_size),
                 '-stroke', 'none', '-fill', 'LightGray',
                 '-gravity', 'north-west',
                 '-annotate', '0', text,
                 target_image_path_s, '+swap',
                 '-gravity', 'north-west',
-                '-geometry', '+24+24',
+                '-geometry', f"+{annotation_font_size//4}+{annotation_font_size//4}",
                 '-composite',
                 target_image_path_s,
             ]
@@ -755,6 +756,7 @@ def _annotate_remixes_with_timestamps(
     delta_t_secs: float,
     obs_suffix: str,
     force: bool = False,
+    annotation_font_size: int = TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE,
 ) -> None:
 
     remixes_image_files_paths = well_remixes_folder_path.glob(f"Img_t*--{obs_suffix}.png")
@@ -772,17 +774,17 @@ def _annotate_remixes_with_timestamps(
             'convert',
             '-size', '360x90', 'xc:none',
             '-gravity', 'center',
-            '-font', 'Helvetica', '-pointsize', '96',
+            '-font', 'Helvetica', '-pointsize', str(annotation_font_size),
             '-stroke', 'gray', '-strokewidth', '2',
             '-annotate', '0', time_min_s,
             '-background', 'none',
             '-shadow', '360x5+0+0', '+repage',
-            '-font', 'Helvetica', '-pointsize', '96',
+            '-font', 'Helvetica', '-pointsize', str(annotation_font_size),
             '-stroke', 'none', '-fill', 'LightGray',
             '-annotate', '0', time_min_s,
             str(path.absolute()), '+swap',
             '-gravity', 'north-west',
-            '-geometry', '+40+24',
+            '-geometry', f"+{annotation_font_size//2}+{annotation_font_size//4}",
             '-composite',
             str(p_annot.absolute())
         ]
@@ -846,6 +848,7 @@ def encode_movies(
     well_movies_folder_path: Path,
     force: bool = False,
     annotate_with_timestamp: bool = True,
+    annotation_font_size: int = TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE,
     force_annotation: bool = False,
     clean_up_images_annotated_with_timestamp: bool = True,
     apply_stabilization: bool = False,
@@ -854,7 +857,7 @@ def encode_movies(
 
     assert delta_t is not None
     delta_t_secs = delta_t.total_seconds()
-    movie_fps_s = f"3600/{round(delta_t_secs)}"  # rational; so that 1h of movie ~ 1m of experiment
+    movie_fps_s = f"3600/{round(delta_t_secs)}"  # rational
     movie_fps_i = round(3600/delta_t_secs)  # used for frequency of keyint insertion
     movie_fps_i = max(movie_fps_i, 1)
 
@@ -873,7 +876,8 @@ def encode_movies(
         if annotate_with_timestamp:
             _annotate_remixes_with_timestamps(well_id, well_remixes_folder_path,
                                               well_movies_folder_path, delta_t_secs, obs_suffix,
-                                              force=force_annotation)
+                                              force=force_annotation,
+                                              annotation_font_size=annotation_font_size)
             source_image_files_folder_path = well_movies_folder_path
             input_image_filename_pattern = f"Img_t%04d--{obs_suffix}{TIMESTAMP_SUFFIX}.png"
         else:
@@ -1443,6 +1447,9 @@ def remaster(
     config_file_path = Path(config_file)
     with open(config_file_path, 'r', encoding='UTF-8') as config_file_io:
         config = yaml.load(config_file_io, Loader=yaml.FullLoader)
+    for obligatory_section in ('Observables', 'Normalization', 'Stitching', 'Remixes'):
+        assert obligatory_section in config, \
+            f"Error: Section '{obligatory_section}' missing in the config file."
 
     # output folder
     output_folder_path = Path(output_folder)
@@ -1469,7 +1476,6 @@ def remaster(
         pickle.dump(wells_info, wells_info_archive)
     wells_info_str = wells_info.to_string(max_cols=100)
     print(80*'-' + '\n', wells_info_str, '\n' + 80*'-')
-
 
     channels_info['Observable'] = channels_info['Name'].map(config['Observables'])
     missing_observables = channels_info[ channels_info['Observable'].isna() ]['Name']
@@ -1503,6 +1509,14 @@ def remaster(
     # remixing settings
     remixing_downscale = config['Remixes']['downscale'] \
             if 'downscale' in config['Remixes'] else False
+
+    # text annotation settings
+    if 'Annotations' in config and 'font_size' in config['Annotations']:
+        annotation_font_size = int(config['Annotations']['font_size'].replace('pt', ''))
+    else:
+        annotation_font_size = TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE
+        print(f"Info: Assumed default text annotation font size: {TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE} pt.")
+
 
     # selection of wells
     if well is not None:
@@ -1626,7 +1640,8 @@ def remaster(
                         force=force_remix,
                         wells_info_for_annotation = \
                             wells_info if annotate_remixes_with_wells_info else None,
-                        is_part_of_timeseries=n_timepoints > 1
+                        is_part_of_timeseries=n_timepoints > 1,
+                        annotation_font_size=annotation_font_size,
                     )
 
 
@@ -1670,7 +1685,8 @@ def remaster(
                         force=force_remix,
                         wells_info_for_annotation = \
                             wells_info if annotate_remixes_with_wells_info else None,
-                        is_part_of_timeseries=n_timepoints > 1
+                        is_part_of_timeseries=n_timepoints > 1,
+                        annotation_font_size=annotation_font_size,
                     )
 
 
@@ -1694,7 +1710,8 @@ def remaster(
                     time_interval,
                     well_remixes_folder_path,
                     well_movies_folder_path,
-                    force=force_encode
+                    force=force_encode,
+                    annotation_font_size=annotation_font_size,
                 )
             else:
                 print(f"[{well_id}] (encoding of movies skipped)")
