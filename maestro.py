@@ -124,6 +124,8 @@ FFMPEG_OPTS_FILTERS = ''.split()  # '-vf deshake'.split()  # -vf "crop=trunc(iw/
 FFMPEG_OPTS_QUALITY = '-preset medium -crf 28 -tune fastdecode'.split()
 FFMPEG_VIDSTAB_FILE_PATH_CORE = Path('/tmp/vidstab-')
 
+MOVIE_DEFAULT_REALTIME_SPEEDUP = 3600  # 1m of live experiment => 1h of movie
+
 CLICK_EXISTING_FILE_PATH_TYPE   = click.Path(exists=True, file_okay=True,  dir_okay=False)
 CLICK_EXISTING_FOLDER_PATH_TYPE = click.Path(exists=True, file_okay=False, dir_okay=True)
 
@@ -846,6 +848,7 @@ def encode_movies(
     delta_t: timedelta,
     well_remixes_folder_path: Path,
     well_movies_folder_path: Path,
+    realtime_speedup: int,
     force: bool = False,
     annotate_with_timestamp: bool = True,
     annotation_font_size: int = TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE,
@@ -857,8 +860,8 @@ def encode_movies(
 
     assert delta_t is not None
     delta_t_secs = delta_t.total_seconds()
-    movie_fps_s = f"3600/{round(delta_t_secs)}"  # rational
-    movie_fps_i = round(3600/delta_t_secs)  # used for frequency of keyint insertion
+    movie_fps_s = f"{round(realtime_speedup)}/{round(delta_t_secs)}"  # rational
+    movie_fps_i = round(realtime_speedup/delta_t_secs)  # used for frequency of keyint insertion
     movie_fps_i = max(movie_fps_i, 1)
 
     well_movies_folder_path.mkdir(exist_ok=True, parents=True)
@@ -1510,7 +1513,14 @@ def remaster(
     remixing_downscale = config['Remixes']['downscale'] \
             if 'downscale' in config['Remixes'] else False
 
-    # text annotation settings
+    # (optional) movie settings
+    if 'Movies' in config and 'realtime_speedup' in config['Movies']:
+        realtime_speedup = int(config['Movies']['realtime_speedup'].replace('x', ''))
+    else:
+        realtime_speedup = MOVIE_DEFAULT_REALTIME_SPEEDUP
+        print(f"Info: Assumed default movie realtime speedup: {MOVIE_DEFAULT_REALTIME_SPEEDUP}x.")
+
+    # (optional) text annotation settings
     if 'Annotations' in config and 'font_size' in config['Annotations']:
         annotation_font_size = int(config['Annotations']['font_size'].replace('pt', ''))
     else:
@@ -1710,6 +1720,7 @@ def remaster(
                     time_interval,
                     well_remixes_folder_path,
                     well_movies_folder_path,
+                    realtime_speedup=realtime_speedup,
                     force=force_encode,
                     annotation_font_size=annotation_font_size,
                 )

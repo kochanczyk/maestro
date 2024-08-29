@@ -150,7 +150,7 @@ Option `--encode` (added by default, use `--no-encode` to disable).
 
 In the case of time-lapse experiments, remixes of consecutive time points may be used as frames of a movie.
 
-The frame rate is always adjusted so that one hour of experiment real time is one second of the movie.
+The frame rate is adjusted so that one hour of experiment real time is one second of the movie. This default can be changed in the config file (see the optional sections).
 
 Hint: To watch movies with zoom, you may use [VLC](https://videolan.com) and then in its menu Tools &rarr; Adjustments and Effects &rarr; Video effects tick the option 'Interactive zoom'; use the bird-view in the top-left corner to move around.
 
@@ -197,6 +197,9 @@ The four sections above are obligatory. You may also include optional sections:
 ```
 Annotations:
     font_size: 32pt  # default is 96pt
+
+Movies:
+    realtime_speedup: 60x  # one minute of the real time -> one second of the movie
 ```
 
 
