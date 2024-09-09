@@ -122,7 +122,6 @@ FFMPEG_OPTS_SILENCE = '-nostdin -loglevel error -y'.split()
 FFMPEG_OPTS_CODEC = '-vcodec libx264 -pix_fmt yuv420p -an'.split()  # -b:v 24M
 FFMPEG_OPTS_FILTERS = ''.split()  # '-vf deshake'.split()  # -vf "crop=trunc(iw/2)*2:trunc(ih/2)*2"
 FFMPEG_OPTS_QUALITY = '-preset medium -crf 28 -tune fastdecode'.split()
-FFMPEG_VIDSTAB_FILE_PATH_CORE = Path('/tmp/vidstab-')
 
 MOVIE_DEFAULT_REALTIME_SPEEDUP = 3600  # 1m of live experiment => 1h of movie
 
@@ -794,54 +793,6 @@ def _annotate_remixes_with_timestamps(
 
 
 
-def _stabilize_movie(
-    well_id: str,
-    well_movies_folder_path: Path,
-    movie_file_path: Path,
-    movie_fps_i: int,
-    obs_suffix: str,
-    remove_nonvidstab_movie: bool,
-) -> None:
-
-    stab_movie_file_name = f"{well_id}--{obs_suffix}--stabilized.mp4"
-    stab_movie_file_path = well_movies_folder_path / stab_movie_file_name
-    random_infix = ''.join(random.choice(string.ascii_uppercase + string.digits)
-                           for _ in range(12)) + '.settings'
-    ffmpeg_vidstab_file_path_s = (f"{str(FFMPEG_VIDSTAB_FILE_PATH_CORE.absolute())}"
-                                  f"{random_infix}.settings")
-
-    cmd1 = [
-        FFMPEG_EXE_PATH_S,
-        *FFMPEG_OPTS_SILENCE,
-        '-i', str(movie_file_path.absolute()),
-        '-vf', 'vidstabdetect=shakiness=3:mincontrast=0.50:stepsize=32:accuracy=15:show=2'
-                       f":result={ffmpeg_vidstab_file_path_s}",
-        '-f', 'null', '-'
-    ]
-    sp.run(cmd1, check=True)
-
-    cmd2 = [
-        FFMPEG_EXE_PATH_S,
-        *FFMPEG_OPTS_SILENCE,
-        '-i', str(movie_file_path.absolute()),
-        *FFMPEG_OPTS_CODEC,
-        '-x264-params', f"keyint={3*movie_fps_i}:scenecut=0",
-        '-vf', 'vidstabtransform=input=' + ffmpeg_vidstab_file_path_s
-                    + ':smoothing=3:interpol=linear:maxshift=200:crop=black:zoom=8',
-        '-movflags', '+faststart',
-        '-preset', 'veryslow', '-crf', '14',
-        str(stab_movie_file_path.absolute())
-    ]
-    sp.run(cmd2, check=True)
-
-    Path(ffmpeg_vidstab_file_path_s).unlink()
-    if remove_nonvidstab_movie:
-        movie_file_path.unlink()
-
-    print(f"[{well_id}] Movie: {stab_movie_file_name}")
-
-
-
 def encode_movies(
     well_id: str,
     infos: List[pd.DataFrame],
@@ -854,8 +805,6 @@ def encode_movies(
     annotation_font_size: int = TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE,
     force_annotation: bool = False,
     clean_up_images_annotated_with_timestamp: bool = True,
-    apply_stabilization: bool = False,
-    remove_nonvidstab_movie: bool = False,
 ) -> None:
 
     assert delta_t is not None
@@ -910,10 +859,6 @@ def encode_movies(
               flush=True)
         sp.run(cmd, check=True)
         print('done')
-
-        if apply_stabilization:
-            _stabilize_movie(well_id, well_movies_folder_path, movie_file_path, movie_fps_i,
-                             obs_suffix, remove_nonvidstab_movie)
 
         if annotate_with_timestamp and clean_up_images_annotated_with_timestamp:
             for path in well_movies_folder_path.glob(f"Img_t*--{obs_suffix}--timestamped.png"):
