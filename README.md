@@ -203,19 +203,25 @@ Movies:
 ```
 
 
+
 Inspection
 ==========
 
 Maestro may be used to get a glimpse of the exported data:
+
+* list of used wells, together with plate layout info:
+```
+    python remaster.py show wells EXPORT_FOLDER_PATH
+```
 
 * list of channels:
 ```
     python remaster.py show channels EXPORT_FOLDER_PATH
 ```
 
-* list of used wells, together with plate layout info:
+* image acquisition settings in each channel:
 ```
-    python remaster.py show wells EXPORT_FOLDER_PATH
+    python remaster.py show settings EXPORT_FOLDER_PATH
 ```
 
 

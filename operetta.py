@@ -203,6 +203,60 @@ def extract_and_derive_images_layout(operetta_export_folder_path: Path) -> pd.Da
 
 
 
+def extract_image_acquisition_settings(operetta_export_folder_path: Path) -> pd.DataFrame:
+
+    index_xml_file_path = operetta_export_folder_path / OPERETTA_IMAGES_SUBFOLDER_NAME \
+                                                      / OPERETTA_IMAGES_INDEX_FILE_NAME
+    xml, ns = _read_xml(index_xml_file_path)
+
+    assert len(xml.findall('Images', ns)) == 1
+    images_xml, = xml.findall('Images', ns)
+
+    setting_names = ['MainExcitationWavelength', 'MainEmissionWavelength', 'ExposureTime']
+
+    channel_acquisition_settings = {}
+    for image_xml in images_xml.findall('Image', ns):
+
+        channel = int(image_xml.findall('ChannelID', ns).pop().text)
+        if channel not in channel_acquisition_settings:
+            channel_acquisition_settings[channel] = {
+                col: set()
+                for col in setting_names
+            }
+
+        for name in setting_names:
+            assert len(image_xml.findall(name, ns)) == 1
+            setting = image_xml.findall(name, ns).pop().text
+            channel_acquisition_settings[channel][name].add(setting)
+
+    for channel, settings in channel_acquisition_settings.items():
+        for name, values in settings.items():
+            channel_acquisition_settings[channel][name] = \
+                values.pop() if len(values) == 1 else list(values)
+
+    df = pd.concat([
+        pd.DataFrame(settings, columns=setting_names, index=[channel])
+        for channel, settings in channel_acquisition_settings.items()
+    ])
+
+    df.index.name = 'ChannelNumber'
+    df.rename(columns={
+        'MainExcitationWavelength': 'Excitation [nm]',
+        'MainEmissionWavelength': 'Emission [nm]',
+        'ExposureTime': 'Exposure [s]'
+    }, inplace=True)
+
+    try:
+        for col in ['Excitation [nm]', 'Emission [nm]']:
+            df[col] = df[col].replace('0', pd.NA).astype(pd.Int32Dtype())
+        df['Exposure [s]'] = df['Exposure [s]'].astype(float)
+    except ValueError:
+        print('Note: Cannot convert some setting values to numeric types.')
+
+    return df
+
+
+
 def extract_time_interval(operetta_export_folder_path: Path) -> timedelta | None:
 
     timestamp_fmt = '%Y-%m-%dT%H:%M:%S.%f%z'

@@ -13,7 +13,7 @@ Commands
 --------
 
 show
-    inspect contents (intented uses are: show channels, show wells)
+    inspect contents (intented uses are: show channels, show wells, show settings)
 
 check
     search for single-pixel images and images devoid of respective entries in metadata
@@ -81,9 +81,9 @@ from operetta import determine_channels_count
 from operetta import extract_plate_layout
 from operetta import extract_wells_info
 from operetta import extract_channels_info
+from operetta import extract_image_acquisition_settings
 from operetta import extract_time_interval
 from operetta import extract_and_derive_images_layout
-
 
 COLOR_COMPONENTS = {
     'red':     'R',
@@ -1170,6 +1170,24 @@ def show_channels(
     print(channels_info_str)
 
 
+
+def show_settings(
+    operetta_export_folder_path: Path,
+    simple: bool,
+) -> None:
+
+    settings_info = extract_image_acquisition_settings(operetta_export_folder_path)
+
+    if not simple:
+        channels_info = extract_channels_info(operetta_export_folder_path)
+        settings_info = settings_info.join(channels_info['Name'])
+        settings_info = settings_info[['Name', 'Excitation [nm]', 'Emission [nm]', 'Exposure [s]']]
+
+    settings_info_str = settings_info.to_string(max_colwidth=24)
+    print(settings_info_str)
+
+
+
 # -------------------------------------- user interface --------------------------------------------
 
 @click.group()
@@ -1293,7 +1311,7 @@ commands.add_command(trackerabilize)
 
 
 @click.command()
-@click.argument('what', type=click.Choice(['wells', 'channels']))
+@click.argument('what', type=click.Choice(['wells', 'channels', 'settings']))
 @click.argument('operetta_export_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
 @click.option('--simple', type=bool, is_flag=True, default=False, show_default=True,
               help="print one (simplified) item per line")
@@ -1313,6 +1331,9 @@ def show(
 
     elif what == 'wells':
         show_wells(operetta_export_folder_path, simple)
+
+    elif what == 'settings':
+        show_settings(operetta_export_folder_path, simple)
 
     else:
         print(f"Error: Don't know how to show '{what}'.")
