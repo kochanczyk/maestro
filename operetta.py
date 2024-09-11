@@ -245,7 +245,7 @@ def extract_image_acquisition_settings(operetta_export_folder_path: Path) -> Tup
                 values.pop() if len(values) == 1 else list(values)
 
     general_settings['Binning'] = [f"{general_settings['BinningX'].pop()}x{general_settings['BinningY'].pop()}"]
-    general_settings['Confocal'] = ['Yes' if general_settings['AcquisitionType'] == 'Confocal' else 'No']
+    general_settings['Confocal'] = ['Yes' if general_settings['AcquisitionType'].pop() == 'NipkowConfocal' else 'No']
     general_df = pd.DataFrame({
         f"{setting}:": f"{value.pop()}x" if setting == 'ObjectiveMagnification' else value
         for setting, value in general_settings.items()
