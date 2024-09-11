@@ -203,7 +203,7 @@ def extract_and_derive_images_layout(operetta_export_folder_path: Path) -> pd.Da
 
 
 
-def extract_image_acquisition_settings(operetta_export_folder_path: Path) -> pd.DataFrame:
+def extract_image_acquisition_settings(operetta_export_folder_path: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
 
     index_xml_file_path = operetta_export_folder_path / OPERETTA_IMAGES_SUBFOLDER_NAME \
                                                       / OPERETTA_IMAGES_INDEX_FILE_NAME
@@ -212,35 +212,55 @@ def extract_image_acquisition_settings(operetta_export_folder_path: Path) -> pd.
     assert len(xml.findall('Images', ns)) == 1
     images_xml, = xml.findall('Images', ns)
 
-    setting_names = ['MainExcitationWavelength', 'MainEmissionWavelength', 'ExposureTime']
+    general_setting_names = ['ObjectiveMagnification', 'BinningX', 'BinningY', 'AcquisitionType']
+    channel_setting_names = ['MainExcitationWavelength', 'MainEmissionWavelength', 'ExposureTime']
 
-    channel_acquisition_settings = {}
+    general_settings = {n: set() for n in general_setting_names}
+    channel_settings = {}
     for image_xml in images_xml.findall('Image', ns):
 
-        channel = int(image_xml.findall('ChannelID', ns).pop().text)
-        if channel not in channel_acquisition_settings:
-            channel_acquisition_settings[channel] = {
-                col: set()
-                for col in setting_names
-            }
-
-        for name in setting_names:
+        for name in general_setting_names:
             assert len(image_xml.findall(name, ns)) == 1
             setting = image_xml.findall(name, ns).pop().text
-            channel_acquisition_settings[channel][name].add(setting)
+            general_settings[name].add(setting)
 
-    for channel, settings in channel_acquisition_settings.items():
+        channel = int(image_xml.findall('ChannelID', ns).pop().text)
+        if channel not in channel_settings:
+            channel_settings[channel] = {
+                col: set()
+                for col in channel_setting_names
+            }
+
+        for name in channel_setting_names:
+            assert len(image_xml.findall(name, ns)) == 1
+            setting = image_xml.findall(name, ns).pop().text
+            channel_settings[channel][name].add(setting)
+
+    for name, values in general_settings.items():
+        general_settings[name] = list(values)
+
+    for channel, settings in channel_settings.items():
         for name, values in settings.items():
-            channel_acquisition_settings[channel][name] = \
+            channel_settings[channel][name] = \
                 values.pop() if len(values) == 1 else list(values)
 
-    df = pd.concat([
-        pd.DataFrame(settings, columns=setting_names, index=[channel])
-        for channel, settings in channel_acquisition_settings.items()
+    general_settings['Binning'] = [f"{general_settings['BinningX'].pop()}x{general_settings['BinningY'].pop()}"]
+    general_settings['Confocal'] = ['Yes' if general_settings['AcquisitionType'] == 'Confocal' else 'No']
+    general_df = pd.DataFrame({
+        f"{setting}:": f"{value.pop()}x" if setting == 'ObjectiveMagnification' else value
+        for setting, value in general_settings.items()
+        if setting not in ['BinningX', 'BinningY', 'AcquisitionType']
+    }).rename(columns={
+        'ObjectiveMagnification:': 'Objective:',
+    }).T
+
+    channels_df = pd.concat([
+        pd.DataFrame(settings, columns=channel_setting_names, index=[channel])
+        for channel, settings in channel_settings.items()
     ])
 
-    df.index.name = 'ChannelNumber'
-    df.rename(columns={
+    channels_df.index.name = 'ChannelNumber'
+    channels_df.rename(columns={
         'MainExcitationWavelength': 'Excitation [nm]',
         'MainEmissionWavelength': 'Emission [nm]',
         'ExposureTime': 'Exposure [s]'
@@ -248,12 +268,12 @@ def extract_image_acquisition_settings(operetta_export_folder_path: Path) -> pd.
 
     try:
         for col in ['Excitation [nm]', 'Emission [nm]']:
-            df[col] = df[col].replace('0', pd.NA).astype(pd.Int32Dtype())
-        df['Exposure [s]'] = df['Exposure [s]'].astype(float)
+            channels_df[col] = channels_df[col].replace('0', pd.NA).astype(pd.Int32Dtype())
+        channels_df['Exposure [s]'] = channels_df['Exposure [s]'].astype(float)
     except ValueError:
         print('Note: Cannot convert some setting values to numeric types.')
 
-    return df
+    return general_df, channels_df
 
 
 

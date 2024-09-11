@@ -1176,15 +1176,20 @@ def show_settings(
     simple: bool,
 ) -> None:
 
-    settings_info = extract_image_acquisition_settings(operetta_export_folder_path)
+    general_settings_info, channel_settings_info = \
+        extract_image_acquisition_settings(operetta_export_folder_path)
 
     if not simple:
         channels_info = extract_channels_info(operetta_export_folder_path)
-        settings_info = settings_info.join(channels_info['Name'])
-        settings_info = settings_info[['Name', 'Excitation [nm]', 'Emission [nm]', 'Exposure [s]']]
+        channel_settings_info = channel_settings_info.join(channels_info['Name'])
+        channel_settings_info = channel_settings_info[[
+            'Name', 'Excitation [nm]', 'Emission [nm]', 'Exposure [s]'
+        ]]
 
-    settings_info_str = settings_info.to_string(max_colwidth=24)
-    print(settings_info_str)
+    general_settings_info_str = general_settings_info.to_string(max_colwidth=24, header=False)
+    channel_settings_info_str = channel_settings_info.to_string(max_colwidth=24)
+    print(general_settings_info_str)
+    print(channel_settings_info_str)
 
 
 
