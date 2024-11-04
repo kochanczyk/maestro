@@ -25,7 +25,7 @@ remaster
     see 'example_config.yaml')
 
 trackerabilize
-    create a folder with ShuttleTracker-compatibile view of a "remixes" folder obtained during
+    create folders with ShuttleTracker-compatibile views of "remixes" folders obtained during
     remastering (using the above-described command 'remaster')
     [ShuttleTracker: https://pmbm.ippt.pan.pl/software/shuttletracker]
 
@@ -1222,7 +1222,7 @@ def trackerabilize(
     output_root_folder: Path,
 ) -> None:
     '''
-    Create a ShuttleTracker-compatible folder.
+    Create ShuttleTracker-compatible folders.
 
     Single-channel images from "remixes" (obtained by running command 'remaster')
     are symlinked to their destination paths.
@@ -1347,7 +1347,7 @@ def show(
     simple: bool = False,
 ) -> None:
     '''
-    Inspect contents (wells or channels).
+    Inspect contents (wells, channels, microscope settings).
     '''
 
     operetta_export_folder_path = Path(operetta_export_folder)
