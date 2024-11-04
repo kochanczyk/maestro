@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from functools import cache
 from collections import namedtuple
 from pathlib import Path
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 
 from xml.etree import ElementTree
 import pandas as pd
@@ -279,7 +279,10 @@ def extract_image_acquisition_settings(operetta_export_folder_path: Path) -> Tup
 
 def extract_time_interval(operetta_export_folder_path: Path) -> timedelta | None:
 
-    timestamp_fmt = '%Y-%m-%dT%H:%M:%S.%f%z'
+    timestamp_fmts = [
+        dict(fmt='%Y-%m-%dT%H:%M:%S.%f%z', requires_correction=False),
+        dict(fmt="%Y-%m-%dT%H:%M:%S%z", requires_correction=True)
+    ]
     coord_names = ('Row', 'Col', 'ChannelID', 'FieldID', 'PlaneID')
 
     index_xml_file_path = operetta_export_folder_path / OPERETTA_IMAGES_SUBFOLDER_NAME \
@@ -290,11 +293,25 @@ def extract_time_interval(operetta_export_folder_path: Path) -> timedelta | None
     for image_entry in xml.find('Images', ns):
         if t_start is None:
             visitee_coords = tuple(map(int, [image_entry.find(c, ns).text for c in coord_names]))
-            t_start = datetime.strptime(image_entry.find('AbsTime', ns).text, timestamp_fmt)
+            t_s = image_entry.find('AbsTime', ns).text
+            for ts_fmt in timestamp_fmts:
+                try:
+                    if ts_fmt['requires_correction']:
+                        t_s = t_s[:-3] + t_s[-2:]  # remove the colon in, e.g., +02:00
+                    t_start = datetime.strptime(t_s, ts_fmt['fmt'])
+                except:
+                    pass
         else:
             assert visitee_coords
             if tuple(map(int, [image_entry.find(c, ns).text for c in coord_names]))==visitee_coords:
-                t_return = datetime.strptime(image_entry.find('AbsTime', ns).text, timestamp_fmt)
+                t_s = image_entry.find('AbsTime', ns).text
+                for ts_fmt in timestamp_fmts:
+                    try:
+                        if ts_fmt['requires_correction']:
+                            t_s = t_s[:-3] + t_s[-2:]  # remove the colon in, e.g., +02:00
+                        t_return = datetime.strptime(t_s, ts_fmt['fmt'])
+                    except:
+                        pass
                 break
 
     if t_start is None or t_return is None:
@@ -394,7 +411,10 @@ def extract_channels_info(operetta_export_folder_path: Path) -> pd.DataFrame:
 
         channel_json = json.loads(channel_json_text)
         channel_names[channel_number] = channel_json['ChannelName']
-        corrections  [channel_number] = channel_json['Background']
+        if 'Background' in channel_json:
+            corrections[channel_number] = channel_json['Background']
+        else:
+            corrections[channel_number] = {'Character': 'Null'}
 
         assert int(channel_json['Channel']) == channel_number
 
