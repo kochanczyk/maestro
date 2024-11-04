@@ -21,7 +21,7 @@ Installation
 
 1. Create a dedicated python virtual environment and populate it with required modules listed in file `requirements.txt`.
 
-2. Make sure that you have ImageJ/Fiji, ImageMagick, and ffmpeg installed. The module often works as a configurable glue-script that delegates tasks to these tools.
+2. Make sure that you have ImageJ/Fiji, ImageMagick, and ffmpeg installed. The module generally works as a configurable glue-script that delegates tasks to these tools.
 
 
 
@@ -111,7 +111,7 @@ Option `--stitch` (added by default, use `--no-stitch` to disable).
 
 Stitching of tiles is delegated to the standard ImageJ "Grid/Collection stitching" plugin. ImageJ is called in the background in a headless mode (additionally enforced by using Xvfb).
 
-The value of the tile-over-tile overlap needs to be given in the config file, in section Stitching. The Harmony setting of '0%' is in reality about 0.5% but in the config file you are expected to provide the nominal value given in Harmony. Please bear in mind that the ideal overlap in bright-field may turn out to be suboptimal in fluorescence channels.
+The value of the tile-over-tile overlap needs to be given in the configuration file, in section Stitching. The Harmony setting of '0%' is in reality about 0.5% but in the config file you are expected to provide the nominal value given in Harmony. Please bear in mind that the ideal overlap in bright-field may turn out to be suboptimal in fluorescence channels.
 
 Stitches retain the channel order of tiles.
 
@@ -132,7 +132,8 @@ Option `--remix` (added by default, use `--no-remix` to disable).
 Generation of so-called remixes involves: (i) affine adjustment of the dynamic range of pixel intensities, (ii) conversion from 16-bit to 8-bit depth with a simple scaling of pixel intensities, (iii) pseudo-coloring of individual channel images.
 
 
-Affine adjustments are given in normalization section of the config file, as a pair of numbers comprising a subtracted (background) intensity value and a multiplicative factor (usually > 1). The list and exact definition of overlaid channels and their respective pseudo-colors is provided in the config file in section Remixes. Available pseudo-colors are: gray, red, green, blue, cyan, magenta, yellow.
+Affine adjustments are given in the normalization section of the configuration file, either as a pair of numbers comprising a subtracted (background) intensity value and a multiplicative factor (usually > 1) or the range of intensity percentages (0% is just 0, whereas 100% corresponds to the maximum possible value of 2^16 - 1, because the 16-bit depth is assumed). The list and exact definition of overlaid channels and their respective pseudo-colors is provided in the config file in section Remixes. Available pseudo-colors are: gray, red, green, blue, cyan, magenta, yellow.
+
 
 Well information provided in and extracted from the plate layout definition may be used to annotate remixes by burning in textual information in top-left image corner. To annotate remixes, add option `--annotate-remixes-with-wells-info`.
 
@@ -152,7 +153,7 @@ In the case of time-lapse experiments, remixes of consecutive time points may be
 
 The frame rate is adjusted so that one hour of experiment real time is one second of the movie. This default can be changed in the config file (see the optional sections).
 
-Hint: To watch movies with zoom, you may use [VLC](https://videolan.com) and then in its menu Tools &rarr; Adjustments and Effects &rarr; Video effects tick the option 'Interactive zoom'; use the bird-view in the top-left corner to move around.
+Hint: To watch movies with zoom, you may use [VLC](https://videolan.com) and then in its menu Tools &rarr; Adjustments and Effects &rarr; Video effects tick the option 'Interactive zoom'; use the bird-view in the top-left corner to move around and a vertical slider just below to (awkwardly) change zoom. Alternatively, you may use [mpv](https://mpv.io), in which you move around and zoom in/out using keyboards shortcuts (and can loop the movie retaining the viewport settings).
 
 
 
@@ -177,7 +178,7 @@ Stitching:
 
 Normalization:
     dapi:    -670, *1.1
-    bf:     -6500, *1.9
+    bf:     10% ... 30%   # equivalent to: -6553, *5
     p65:    -2420, *2.9
     polyic: -5635, *7.8
 
@@ -239,7 +240,7 @@ to obtain BZ2-compressed archives of images, one archive per well.
 
 By default, internal compression is abrogated (TIFF files exported by Harmony are internally compressed with LZW, which prevents a more efficient external compression).
 
-Note on compression ratio: bzip2, although slow, was experimentally checked to give the best compression ratio, exceeding that of zip and even xz (at its "ultra" settings and extra-large dictionary), and is considered more suitable for long-term data storage than xz.
+Note on compression ratio: bzip2, although slow, was experimentally confirmed to give the best compression ratio, exceeding that of zip and even xz (at its "ultra" settings and extra-large dictionary), and is considered more suitable for long-term data storage than xz.
 
 
 ### Unarchiving
@@ -248,14 +249,14 @@ To extract all images, enter the Images folder containing per-well archives and 
 ```
     find . -name 'well-*.tar.bz2' -exec tar xfj {} \;
 ```
-The images are decompressed directly in the Images folder (not in any well subfolder), recovering the original flat layout of files in folder Images.
+The images are decompressed directly in the Images folder (not in any well subfolder), recovering the original flat layout of image files in folder Images.
 
 
 
 Limitations
 ===========
 
-The module has never been used to process Z-stacks (except for a built-in capability to select best focused image in a Z stack).
+The module has never been used to process Z-stacks (except for a built-in capability to select the best focused image in a Z stack).
 
 
 

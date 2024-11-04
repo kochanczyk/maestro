@@ -438,7 +438,10 @@ def stitch_tiles(
         zero_pixels_in_output_image_retries_count = 0
 
 
-    desc = f"[{well_id}] {STITCHES_FOLDER_BASE_NAME}: {'fijing:' if n_fields_x*n_fields_y>1 else 'copying:'}"
+    desc = (
+        f"[{well_id}] {STITCHES_FOLDER_BASE_NAME}: "
+        f"{'fijing:' if n_fields_x*n_fields_y>1 else 'copying:'}"
+    )
     for timepoint, tile_images_paths in tqdm(tile_images_paths_grouped_by_timepoint, desc=desc,
                                              **TQDM_STYLE):
 
@@ -506,7 +509,8 @@ def stitch_tiles(
 
                 if require_no_zero_pixels_in_output_image:
                     dst_file_path_s = str(dst_file_path.absolute())
-                    reading_ok, dst_img = cv2.imreadmulti(dst_file_path_s, flags=cv2.IMREAD_UNCHANGED)
+                    reading_ok, dst_img = cv2.imreadmulti(dst_file_path_s,
+                                                          flags=cv2.IMREAD_UNCHANGED)
                     assert reading_ok
                     assert len(dst_img) > 0
                     if (zero_pixel_count := sum(sum(dst_img).ravel() == 0)) > 0:
@@ -566,23 +570,34 @@ def _assemble_suffix(info: pd.DataFrame) -> str:
 
 
 
-def _derive_channels_composition(mixing_info: pd.DataFrame) -> dict:
+def _intensity_range_arithmetics(obs_norm: str, obs_name: str) -> Tuple[str, str]:
+    # 'Normalization' means manual adjustment of the dynamic range of pixel intensities.
 
-    # Here, 'normalization' means manual adjustment of the dynamic range of pixel intensities.
-    normalization_re = re.compile(r'-(?P<sub>[0-9]+)?\ *,\ *\*(?P<mul>(\d+(\.\d*)?)|(\.\d+))?')
+    if pd.isna(obs_norm):
+        print(f"Warning: Missing normalization for observable '{obs_name}'! Assuming -0, *1.")
+        return ('0', '1.')
+
+    normalization_re1 = re.compile(r'-(?P<sub>[0-9]+)?\ *,\ *\*(?P<mul>(\d+(\.\d*)?)|(\.\d+))?')
+    if normalization_re1_match := normalization_re1.match(obs_norm):
+        return tuple(map(normalization_re1_match.group, ['sub', 'mul']))
+
+    normalization_re2 = re.compile(r'((?P<begin>[0-9]+)%)?\ *...\ *((?P<end>[0-9]+)%)?')
+    if normalization_re2_match := normalization_re2.match(obs_norm):
+        begin, end = map(float, map(normalization_re2_match.group, ['begin', 'end']))
+        return tuple(map(str, [int((begin/100)*(2**16 - 1)), 100./(end - begin)]))
+
+    print("Cannot parse the normalization for observable '{obs_name}' ('obs_norm'?)! "
+          "Assuming -0, *1.")
+    return ('0', '1.')
+
+
+
+def _derive_channels_composition(mixing_info: pd.DataFrame) -> dict:
 
     # single_channel
     if len(mixing_info) == 1 and mixing_info.index[0] == 'gray':
         tiff_page, obs_norm = mixing_info[['TiffPage', 'Normalization']].iloc[0]
-        if not pd.isna(obs_norm):
-            normalization_re_match = normalization_re.match(obs_norm)
-            assert normalization_re_match is not None, "Cannot parse the normalization parameters"
-            sub, mul = map(normalization_re_match.group, ['sub', 'mul'])
-        else:
-            print(f"Warning: Missing normalization for '{mixing_info['Observable'].iloc[0]}'! "
-                  "Assuming -0, *1.")
-            print(mixing_info)
-            sub, mul = map(str, [0, 1.])
+        sub, mul = _intensity_range_arithmetics(obs_norm, mixing_info['Observable'].iloc[0])
         return {'gray': (tiff_page, (sub, mul))}
 
     # multi_channel
@@ -591,15 +606,7 @@ def _derive_channels_composition(mixing_info: pd.DataFrame) -> dict:
         composition[component] = []
         for color, (tiff_page, obs_norm) in mixing_info[['TiffPage', 'Normalization']].iterrows():
             if component in COLOR_COMPONENTS[color]:
-                if not pd.isna(obs_norm):
-                    normalization_re_match = normalization_re.match(obs_norm)
-                    assert normalization_re_match is not None
-                    sub, mul = map(normalization_re_match.group, ['sub', 'mul'])
-                else:
-                    print(f"Warning: Missing normalization for the {color} observable! "
-                          "Assuming -0, *1.")
-                    print(mixing_info)
-                    sub, mul = map(str, [0, 1.])
+                sub, mul = _intensity_range_arithmetics(obs_norm, color)
                 component_definition = (tiff_page, (sub, mul))
                 composition[component].append(component_definition)
     return composition
@@ -678,7 +685,9 @@ def remix_channels(
                 if n_source_channels == 0:
                     continue
                 assert n_source_channels < 3, \
-                    f"Too many source channels for the {component} component of the overlay!"
+                    f"Too many source channels for the *{
+                        {'R': 'red', 'G': 'green', 'B': 'blue'}[component]
+                    }* component of the overlay!"
 
                 used_component_channels += component
 
@@ -1155,7 +1164,8 @@ def show_wells(
 ) -> None:
 
     wells_info = extract_wells_info(operetta_export_folder_path)
-    wells_info_str ='\n'.join(wells_info['WellId']) if simple else wells_info.to_string(max_cols=100)
+    wells_info_str= '\n' .join(wells_info['WellId']) if simple else \
+        wells_info.to_string(max_cols=100)
     print(wells_info_str)
 
 
@@ -1166,7 +1176,8 @@ def show_channels(
 ) -> None:
 
     channels_info = extract_channels_info(operetta_export_folder_path)
-    channels_info_str = '\n'.join(channels_info['Name']) if simple else channels_info.to_string(max_colwidth=48)
+    channels_info_str = '\n'.join(channels_info['Name']) if simple else \
+        channels_info.to_string(max_colwidth=48)
     print(channels_info_str)
 
 
@@ -1263,7 +1274,8 @@ def trackerabilize(
         if not item.is_dir():
             continue
         folder = item
-        if folder.name.endswith(REMIXES_FOLDER_BASE_NAME) and folder.name != REMIXES_FOLDER_BASE_NAME:
+        if folder.name.endswith(REMIXES_FOLDER_BASE_NAME) and \
+                folder.name != REMIXES_FOLDER_BASE_NAME:
             remixes_folder = folder
 
             # source image files
@@ -1276,8 +1288,11 @@ def trackerabilize(
             observables = dict(enumerate(set(
                 single_channel_remix_match.group('observable')
                 for path in image_files_paths
-                if (single_channel_remix_match := single_channel_remix_re.search(path.name)) is not None
+                if (single_channel_remix_match := single_channel_remix_re.search(path.name)) \
+                        is not None
             )))
+            for obs in observables.values():
+                assert obs in colors.index, f"Observable '{obs}' has no assigned pseudocolor!"
 
             # create output folder
             well_id = remixes_folder.name.replace(f"-{REMIXES_FOLDER_BASE_NAME}", '')
@@ -1302,12 +1317,18 @@ def trackerabilize(
                 if delta_t is not None:
                     print(f"time_interval {delta_t.total_seconds()}", file=st_file)
 
-            print(f"Info: Images from '{remixes_folder.name}' symlinked in '{shuttletrackerable_folder.name}'.")
+            print(f"Info: Images from '{remixes_folder.name}' symlinked in "
+                  f"'{shuttletrackerable_folder.name}'.")
 
             processed_folders_count += 1
 
-    print("Info: Creating ShuttleTracker-viewable folders ... done")
-    if processed_folders_count != len(wells_info):
+    if processed_folders_count == len(wells_info):
+        print("Info: Creating ShuttleTracker-viewable folders ... done")
+    else:
+        if processed_folders_count > 0:
+            print("Info: Creating ShuttleTracker-viewable folders ... PARTLY done")
+        else:
+            print("Info: Creating ShuttleTracker-viewable folders ... NOT done")
         print(f"Warning: Processed folder count: {processed_folders_count}, "
               f"well count in metadata: {len(wells_info)}.")
 
@@ -1489,14 +1510,16 @@ def remaster(
         realtime_speedup = int(config['Movies']['realtime_speedup'].replace('x', ''))
     else:
         realtime_speedup = MOVIE_DEFAULT_REALTIME_SPEEDUP
-        print(f"Info: Assumed default movie realtime speedup: {MOVIE_DEFAULT_REALTIME_SPEEDUP}x.")
+        print("Info: Assumed the default movie real time speed-up: "
+              f"{MOVIE_DEFAULT_REALTIME_SPEEDUP}x.")
 
     # (optional) text annotation settings
     if 'Annotations' in config and 'font_size' in config['Annotations']:
         annotation_font_size = int(config['Annotations']['font_size'].replace('pt', ''))
     else:
         annotation_font_size = TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE
-        print(f"Info: Assumed default text annotation font size: {TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE} pt.")
+        print("Info: Assumed default text annotation font size: "
+              f"{TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE} pt.")
 
 
     # selection of wells
@@ -1765,7 +1788,8 @@ def _check(
             empty_image_path = images_folder_path / 'empty.tiff'
             cv2.imwrite(str(empty_image_path.absolute()), empty_image.astype(np.uint16))
 
-            for image_path, image_shape in tqdm(image_shapes.items(), desc='Info: Fixing ...', **TQDM_STYLE):
+            for image_path, image_shape in tqdm(image_shapes.items(), desc='Info: Fixing ...',
+                                                **TQDM_STYLE):
                 if image_shape[0]*image_shape[1] in (0, 1):
                     image_path.rename(str(image_path.absolute()) + '.orig')
                     image_path.symlink_to(empty_image_path.name)
