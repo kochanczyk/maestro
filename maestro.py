@@ -685,9 +685,9 @@ def remix_channels(
                 if n_source_channels == 0:
                     continue
                 assert n_source_channels < 3, \
-                    f"Too many source channels for the *{
+                    f"""Too many source channels for the *{
                         {'R': 'red', 'G': 'green', 'B': 'blue'}[component]
-                    }* component of the overlay!"
+                    }* component of the overlay!"""
 
                 used_component_channels += component
 

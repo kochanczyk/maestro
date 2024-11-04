@@ -153,7 +153,7 @@ In the case of time-lapse experiments, remixes of consecutive time points may be
 
 The frame rate is adjusted so that one hour of experiment real time is one second of the movie. This default can be changed in the config file (see the optional sections).
 
-Hint: To watch movies with zoom, you may use [VLC](https://videolan.com) and then in its menu Tools &rarr; Adjustments and Effects &rarr; Video effects tick the option 'Interactive zoom'; use the bird-view in the top-left corner to move around and a vertical slider just below to (awkwardly) change zoom. Alternatively, you may use [mpv](https://mpv.io), in which you move around and zoom in/out using keyboards shortcuts (and can loop the movie retaining the viewport settings).
+Hint: To watch movies with zoom, you may use [VLC](https://videolan.com) and then in its menu Tools &rarr; Adjustments and Effects &rarr; Video effects tick the option 'Interactive zoom'; use the bird-view in the top-left corner to move around and a vertical slider just below to (awkwardly) change zoom. Alternatively, you may use [mpv](https://mpv.io), in which you can move around and zoom in/out using keyboard shortcuts (and also can loop the movie while retaining the viewport settings).
 
 
 
