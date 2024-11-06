@@ -577,14 +577,18 @@ def _intensity_range_arithmetics(obs_norm: str, obs_name: str) -> Tuple[str, str
         print(f"Warning: Missing normalization for observable '{obs_name}'! Assuming -0, *1.")
         return ('0', '1.')
 
-    normalization_re1 = re.compile(r'-(?P<sub>[0-9]+)?\ *,\ *\*(?P<mul>(\d+(\.\d*)?)|(\.\d+))?')
+    normalization_re1 = re.compile(r'-(?P<sub>[0-9]+)?'
+                                   r'\ *,\ *'
+                                   r'\*(?P<mul>(\d+(\.\d*)?)|(\.\d+))?')
     if normalization_re1_match := normalization_re1.match(obs_norm):
         return tuple(map(normalization_re1_match.group, ['sub', 'mul']))
 
-    normalization_re2 = re.compile(r'((?P<begin>[0-9]+)%)?\ *...\ *((?P<end>[0-9]+)%)?')
+    normalization_re2 = re.compile(r'((?P<begin>(\d+(\.\d*)?)|(\.\d+))%)?'
+                                   r'\ *...\ *'
+                                   r'((?P<end>(\d+(\.\d*)?)|(\.\d+))%)?')
     if normalization_re2_match := normalization_re2.match(obs_norm):
         begin, end = map(float, map(normalization_re2_match.group, ['begin', 'end']))
-        return tuple(map(str, [int((begin/100)*(2**16 - 1)), 100./(end - begin)]))
+        return tuple(map(str, [int((begin/100.)*(2**16 - 1)), 100./(end - begin)]))
 
     print("Cannot parse the normalization for observable '{obs_name}' ('obs_norm'?)! "
           "Assuming -0, *1.")
