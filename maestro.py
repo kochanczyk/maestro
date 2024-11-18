@@ -418,8 +418,8 @@ def stitch_tiles(
     downscale: bool = False,
     compress_output_tif: bool = True,  # non-compressed better zippable externally thou
     require_no_zero_pixels_in_output_image: bool = True,
-    zero_pixels_in_output_image_retries_count: int = 10,
-    same_zero_pixels_counts_consecutively_for_early_exit: int = 3,
+    zero_pixels_in_output_image_retries_count: int = 5,
+    same_zero_pixels_counts_consecutively_for_early_exit: int = 2,
 ) -> None:
 
     assert tiles_folder_path.exists(), \
@@ -580,13 +580,13 @@ def _intensity_range_arithmetics(obs_norm: str, obs_name: str) -> Tuple[str, str
     normalization_re1 = re.compile(r'-(?P<sub>[0-9]+)?'
                                    r'\ *,\ *'
                                    r'\*(?P<mul>(\d+(\.\d*)?)|(\.\d+))?')
-    if normalization_re1_match := normalization_re1.match(obs_norm):
+    if normalization_re1_match := normalization_re1.fullmatch(obs_norm):
         return tuple(map(normalization_re1_match.group, ['sub', 'mul']))
 
     normalization_re2 = re.compile(r'((?P<begin>(\d+(\.\d*)?)|(\.\d+))%)?'
                                    r'\ *...\ *'
                                    r'((?P<end>(\d+(\.\d*)?)|(\.\d+))%)?')
-    if normalization_re2_match := normalization_re2.match(obs_norm):
+    if normalization_re2_match := normalization_re2.fullmatch(obs_norm):
         begin, end = map(float, map(normalization_re2_match.group, ['begin', 'end']))
         return tuple(map(str, [int((begin/100.)*(2**16 - 1)), 100./(end - begin)]))
 
@@ -960,8 +960,8 @@ def _place_image_files_in_their_respective_well_folders(
             transfer_file(image_file, dest_dir_path)
 
             if abolish_internal_compression:
-                image_file_path = dest_dir_path / image_file
-                assert image_file_path.exists()
+                image_file_path = dest_dir_path / image_file.name
+                assert image_file_path.exists(), f"File '{image_file_path}' disappeared!"
                 compress_args = ['-compress', 'none']
                 image_file_path_s = str(image_file_path.absolute())
                 cmd = [MOGRIFY_EXE_PATH_S, *compress_args, image_file_path_s]
