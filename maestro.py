@@ -39,7 +39,6 @@ Type 'python maestro.py COMMAND --help' to learn about COMMAND's arguments and o
 '''
 
 import sys
-import platform
 import shutil
 import string
 import re
@@ -51,7 +50,7 @@ from time import sleep
 from datetime import timedelta
 import pickle
 from pathlib import Path
-from typing import List, Dict, Tuple, Literal, Optional
+from typing import List, Dict, Tuple, Literal
 import subprocess as sp
 from multiprocessing import Process, Queue
 import tarfile
@@ -67,8 +66,8 @@ import cv2
 
 from operetta import (
     EXPORTED_IMAGES_SUBFOLDER_NAME,
-    EXPORTED_IMAGE_NAME_RE,
-    EXPORTED_IMAGE_NAME_EXTENSION,
+    EXPORTED_IMAGE_FILE_NAME_RE,
+    EXPORTED_IMAGE_FILE_NAME_EXTENSION,
     OBSERVABLE_COLOR_RE,
     EXTRA_TILE_OVERLAP,
     WellLocation,
@@ -178,7 +177,7 @@ def _prepare_flatfield_correction_images(
     image_shape: Tuple[int, int],
 ) -> Dict[int, np.ndarray]:
 
-    assert image_shape[0]*image_shape[1] > 1, "A stub of an image encountered."
+    assert image_shape[0]*image_shape[1] > 1, "Only a stub of an image encountered."
 
     ffc_profile_images = {}
     for channel_number in channels_info.index:
@@ -205,93 +204,46 @@ def _prepare_flatfield_correction_images(
                     i = len(coeffs_row) - 1 - j
                     ffc_profile_image += coeff * xx**i * yy**j
 
-
         ffc_profile_images[channel_number] = ffc_profile_image
 
     return ffc_profile_images
 
 
 
-def _flatfield_correct(
-    orig_image_file_path: Path,
-    corr_image_file_path: Path,
+def _read_exported_image(
+    image_file_path: Path,
+    image_shape: Tuple[int, int] = (1, 1),
+    image_dtype: str = 'uint16',
+    n_attempts: int = 2  # work around occasional 'permission denied' from overloaded SMB servers
+) -> np.ndarray:
+
+    for _attempt_i in range(n_attempts):
+        if (image:= cv2.imread(image_file_path, cv2.IMREAD_UNCHANGED)) is not None:
+            return image
+        sleep(1 + random.choice(range(3)))
+
+    error_msg = f"Error reading image file '{str(image_file_path.absolute())}'!"
+    if image_shape is None:
+        raise IOError(error_msg)
+
+    print(error_msg)
+    return np.zeros(shape=image_shape, dtype=image_dtype)
+
+
+
+def _flatfield_corrected(
+    image: np.ndarray,
     profile_image: np.ndarray,
-    image_shape: tuple,
-    image_dtype: str,
-) -> None:
-    tiff16 = cv2.imread(str(orig_image_file_path.absolute()), cv2.IMREAD_UNCHANGED)
-    if tiff16 is None:
-        # Re-try ('permission denied' may happen occasionally through an overloaded SMB connection).
-        sleep(2 + random.choice(range(4)))
-        tiff16 = cv2.imread(str(orig_image_file_path.absolute()), cv2.IMREAD_UNCHANGED)
-        if tiff16 is None:
-            print(f"Error reading image file '{str(orig_image_file_path.absolute())}'!")
-            tiff16 = np.zeros(shape=image_shape, dtype=image_dtype)
-    assert tiff16.dtype == 'uint16', \
-        "Depth of an image subjected to flat-field correction is other than 16 bit!"
+) -> np.ndarray:
+
+    assert image.dtype == 'uint16', 'Depth of an image subjected to flatfield correction != 16 bit!'
     bit_depth = 16
 
-    ffced_image = tiff16 / profile_image
+    ffced_image = image / profile_image
     assert ffced_image.dtype == 'float64'
+
     ffced_image = np.clip(ffced_image, 0, 2**bit_depth - 1)
-    cv2.imwrite(str(corr_image_file_path.absolute()), ffced_image.astype(np.uint16))
-
-
-
-def _correct_tile(
-    orig_image_file_path: Path,
-    image_shape: Tuple[int, int],
-    image_dtype,
-    images_layout: pd.DataFrame,
-    tiles_folder_path: Path,
-    address: Dict[str, int],  # passed for consistency checks
-    ffc_profile_images: Optional[Dict[int, np.ndarray]],
-    force: bool,
-) -> Tuple[Path, Path]:
-
-    row, column, field, plane, timepoint, channel = map(int, [
-        image_file_name_match.group(chunk_name)
-        for chunk_name in ('row', 'column', 'field', 'plane', 'timepoint', 'channel')
-        if (image_file_name_match := EXPORTED_IMAGE_NAME_RE.search(orig_image_file_path.name)) \
-            is not None
-    ])
-    assert row == address['row'] and column == address['column']
-    assert timepoint == address['timepoint']
-    assert field == address['field']
-    assert plane == address['plane']
-    assert channel == address['channel']
-
-    field_ix, field_iy = field_number_to_xy(orig_image_file_path.name, images_layout)
-
-    # Note: All indices, including those of timepoints, planes, and channels, become 0-based.
-    corr_image_file_name = f"Img_t{timepoint - 1:04d}" \
-                           f"_x{field_ix}_y{field_iy}" \
-                           f"_z{plane - 1}"            \
-                           f"_c{channel - 1}"          \
-                            ".tif"
-    corr_image_file_path = tiles_folder_path / corr_image_file_name
-
-    multi_corr_image_file_name = re.sub('_z[0-9]+_c[0-9]+', '', corr_image_file_name)
-    multi_corr_image_file_path = corr_image_file_path.parent / multi_corr_image_file_name
-
-    if not force and multi_corr_image_file_path.exists() \
-                 and multi_corr_image_file_path.stat().st_size > 0:
-        return corr_image_file_path, multi_corr_image_file_path
-
-    if not force and corr_image_file_path.exists() \
-                 and corr_image_file_path.stat().st_size > 0:
-        return corr_image_file_path, multi_corr_image_file_path
-
-    if ffc_profile_images:
-        _flatfield_correct(orig_image_file_path, corr_image_file_path,
-                           ffc_profile_images[channel], image_shape, image_dtype)
-    else:
-        if platform.system().lower() == 'linux':
-            corr_image_file_path.symlink_to(orig_image_file_path.absolute())
-        else:
-            shutil.copy(orig_image_file_path, corr_image_file_path)
-
-    return corr_image_file_path, multi_corr_image_file_path
+    return ffced_image.astype(np.uint16)
 
 
 
@@ -304,8 +256,7 @@ def correct_tiles(
     tiles_folder_path: Path,
     force: bool = False,
     apply_flatfield_correction: bool = True,
-    clean_up_single_channel_single_plane_tiles: bool = True,
-    compress_output_tif: bool = False,
+    compress_output_tiff: bool = False,
 ) -> None:
     '''
     Result: multiple single-channel images converted to a single multi-page image file.
@@ -315,75 +266,83 @@ def correct_tiles(
     apply_flatfield_correction:
         If False, the outcome is just a renamed symlink.
     '''
-
-    tiles_folder_path.mkdir(exist_ok=True, parents=True)
-
-    if apply_flatfield_correction:
-        for an_image_path in well_orig_image_files_paths:
-            an_image_path_str = str(an_image_path.absolute())
-            an_image = cv2.imread(an_image_path_str, cv2.IMREAD_UNCHANGED)
-            image_shape, image_dtype = an_image.shape, an_image.dtype
-            if image_shape[0]*image_shape[1] == 1:
-                print(f"Warning: Image file '{an_image_path.name}' has just one pixel!")
-                continue
-
-            ffc_profile_images = _prepare_flatfield_correction_images(channels_info, image_shape)
-            break
-
-        disclosure = ''
-    else:
-        ffc_profile_images = None
-        disclosure = 'non-'
-
     by = {
         't': r'sk(?P<groupby>[0-9]+)',
         'f': r'f(?P<groupby>[0-9]+)',
         'p': r'p(?P<groupby>[0-9]+)',
         'ch': r'-ch(?P<groupby>[0-9])',
     }
+    tiff_writer_opts = {
+        'photometric': 'minisblack',
+        'compression': 'lzw' if compress_output_tiff else 'none'
+    }
 
-    well_orig_image_paths_gby_timepoint = _group_paths_by(well_orig_image_files_paths, by['t'])
-    for group_timepoint, t_paths in tqdm(
-        well_orig_image_paths_gby_timepoint,
-        desc=f"[{well_id}] {CORRTILES_FOLDER_BASE_NAME}: {disclosure}correcting:",
-        **TQDM_STYLE
-    ):
-        for group_field, ft_paths in _group_paths_by(t_paths, by['f']):
+    tiles_folder_path.mkdir(exist_ok=True, parents=True)
 
-            corr_images_file_paths = []
-            for group_plane, zft_img_paths in _group_paths_by(ft_paths, by['p']):
-                for solo_channel, czft_img_paths in _group_paths_by(zft_img_paths, by['ch']):
+    # extract common image shape and data type
+    assert len(well_orig_image_files_paths) > 0
+    for image_path in well_orig_image_files_paths:
+        image = _read_exported_image(image_path)
+        image_shape, image_dtype = image.shape, image.dtype
+        if image_shape[0]*image_shape[1] != 1:
+            image_info = {'image_shape': image_shape, 'image_dtype': image_dtype}
+            break
+
+    # use image info to generate flatfield correction profiles
+    if apply_flatfield_correction:
+        ffc_profile_images = _prepare_flatfield_correction_images(channels_info, image_shape)
+        is_correcting_prefix = ''
+    else:
+        ffc_profile_images = None
+        is_correcting_prefix = 'non-'
+
+    # process all exported files for a current weel
+    # order of loops: T -> position -> Z -> C -> XY; nominally, DimensionsOrder is XYCZT
+    image_paths_gby_timepoint = _group_paths_by(well_orig_image_files_paths, by['t'])
+    t_collection = \
+        tqdm(
+            image_paths_gby_timepoint,
+            desc=f"[{well_id}] {CORRTILES_FOLDER_BASE_NAME}: {is_correcting_prefix}correcting:",
+            **TQDM_STYLE
+        ) if len(image_paths_gby_timepoint) > 1 else \
+        image_paths_gby_timepoint
+    for timepoint, t_paths in t_collection:
+
+        t_image_paths_gby_field = _group_paths_by(t_paths, by['f'])
+        f_collection = \
+            tqdm(
+                t_image_paths_gby_field,
+                desc=f"[{well_id}] {CORRTILES_FOLDER_BASE_NAME}: {is_correcting_prefix}correcting:",
+                **TQDM_STYLE
+            ) if len(t_image_paths_gby_field) > 1 and len(image_paths_gby_timepoint) == 1 else \
+            t_image_paths_gby_field
+        for field, ft_paths in f_collection:
+
+            # assemble output image file path
+            fn = assemble_image_file_name(well_loc.row, well_loc.column, field, 1, 1, timepoint)
+            field_ix, field_iy = field_number_to_xy(fn, images_layout)
+            out_image_name = f"Img_t{timepoint - 1:04d}_x{field_ix}_y{field_iy}.tif"
+            out_image_file_path = tiles_folder_path / out_image_name
+
+            # maybe skip generation if the file already exists
+            if not force and out_image_file_path.exists():
+                continue
+
+            # generate all output file image frames
+            output_frames = []
+            for _plane, zft_img_paths in _group_paths_by(ft_paths, by['p']):
+                for channel, czft_img_paths in _group_paths_by(zft_img_paths, by['ch']):
                     for orig_image_file_path in czft_img_paths:
-                        corr_image_file_path, multi_corr_image_file_path = _correct_tile(
-                            orig_image_file_path,
-                            image_shape=image_shape,
-                            image_dtype=image_dtype,
-                            images_layout=images_layout,
-                            tiles_folder_path=tiles_folder_path,
-                            address={
-                                'row': well_loc.row,
-                                'column': well_loc.column,
-                                'timepoint': int(group_timepoint),
-                                'field': int(group_field),
-                                'plane': int(group_plane),
-                                'channel': int(solo_channel),
-                            },
-                            ffc_profile_images=ffc_profile_images,
-                            force=force,
+                        image = _read_exported_image(orig_image_file_path, **image_info)
+                        output_frames.append(
+                            _flatfield_corrected(image, ffc_profile_images[channel]) \
+                            if apply_flatfield_correction else image
                         )
-                        corr_images_file_paths.append(corr_image_file_path)
 
-            # generate a multi-page TIFF file
-            src_files_paths_s = [str(f.absolute()) for f in corr_images_file_paths]
-            dst_file_path_s = str(multi_corr_image_file_path)
-            compress_args = ['-compress', 'lzw' if compress_output_tif else 'none']
-            cmd = [CONVERT_EXE_PATH_S, *src_files_paths_s, *compress_args, dst_file_path_s]
-            sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True)
-
-            #  if symlinks to original images or corrected images are no longer needed
-            if clean_up_single_channel_single_plane_tiles:
-                for tile_image_path in corr_images_file_paths:
-                    tile_image_path.unlink()
+            # write out all image frame to an output file
+            with tifffile.TiffWriter(out_image_file_path) as tiff_writer:
+                for frame in output_frames:
+                    tiff_writer.write(frame, **tiff_writer_opts)
 
 
 
@@ -457,7 +416,7 @@ def stitch_tiles(
     tile_overlap: float,
     force: bool = False,
     downscale: bool = False,
-    compress_output_tif: bool = True,  # non-compressed better zippable externally thou
+    compress_output_tiff: bool = True,  # non-compressed better zippable externally thou
     require_no_zero_pixels_in_output_image: bool = True,
     zero_pixels_in_output_image_retries_count: int = 5,
     same_zero_pixels_counts_consecutively_for_early_exit: int = 2,
@@ -561,7 +520,7 @@ def stitch_tiles(
                             break
                         continue  # retry
 
-        if compress_output_tif:
+        if compress_output_tiff:
             dst_file_path_s = str(dst_file_path.absolute())
             cmd = [CONVERT_EXE_PATH_S, dst_file_path_s, '-compress', 'zip', dst_file_path_s]
             sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True)
@@ -948,7 +907,7 @@ def _place_image_files_in_their_respective_well_folders(
 
     image_files_paths = [
         file_path for file_path in files_paths
-        if EXPORTED_IMAGE_NAME_RE.match(
+        if EXPORTED_IMAGE_FILE_NAME_RE.match(
             re.sub('.orig$', '', file_path.name)   # accepting both '*.tiff' and '*.tiff.orig'
         )
     ]
@@ -965,7 +924,7 @@ def _place_image_files_in_their_respective_well_folders(
     # -- build {(row, col): [list of all images of the well in the (row, col)]} --------------------
 
     def extract_row_col_(path: Path) -> tuple:
-        image_name_match = EXPORTED_IMAGE_NAME_RE.search(path.name)
+        image_name_match = EXPORTED_IMAGE_FILE_NAME_RE.search(path.name)
         assert image_name_match is not None
         return tuple(map(image_name_match.group, ['row', 'column']))
 
@@ -1086,7 +1045,7 @@ def select_best_focus_planes(
     source_image_file_paths = [
         path
         for path in source_images_folder_path.iterdir()
-        if path.name.endswith(EXPORTED_IMAGE_NAME_EXTENSION)
+        if path.name.endswith(EXPORTED_IMAGE_FILE_NAME_EXTENSION)
     ]
 
     chunk_indices: Dict[str, set] = {
@@ -1094,7 +1053,7 @@ def select_best_focus_planes(
         for chunk_name in 'row column field plane channel timepoint'.split()
     }
     for image_path in source_image_file_paths:
-        image_file_name_match = EXPORTED_IMAGE_NAME_RE.search(image_path.name)
+        image_file_name_match = EXPORTED_IMAGE_FILE_NAME_RE.search(image_path.name)
         assert image_file_name_match is not None
         for chunk_name in chunk_indices.keys():
             chunk_index = image_file_name_match.group(chunk_name)
@@ -1904,7 +1863,7 @@ def archivize(
     archive_root: str = '.', # extracted files will be placed in the current folder (that's desired)
 ):
     '''
-    Create per-well image archives.
+    Create archives of per-well images.
 
     This command moves or copies image files to individual well-specific folders and then
     compresses the folders.

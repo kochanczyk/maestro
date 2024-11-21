@@ -26,8 +26,8 @@ import pandas as pd
 WellLocation = namedtuple('WellLocation', ['row', 'column'])
 WellContents = namedtuple('WellContents', ['id', 'desc'])
 
-EXPORTED_IMAGE_NAME_EXTENSION = '.tiff'
-EXPORTED_IMAGE_NAME_RE = re.compile(
+EXPORTED_IMAGE_FILE_NAME_EXTENSION = '.tiff'
+EXPORTED_IMAGE_FILE_NAME_RE = re.compile(
     ''.join([f"{letter}(?P<{meaning}>[0-9]{str('{2,}')})"
     for letter, meaning in [
         ('r', 'row'),
@@ -39,7 +39,7 @@ EXPORTED_IMAGE_NAME_RE = re.compile(
     'ch(?P<channel>[0-9]+)'
     'sk(?P<timepoint>[0-9]+)'
     'fk[0-9]+fl[0-9]+' +
-    EXPORTED_IMAGE_NAME_EXTENSION
+    EXPORTED_IMAGE_FILE_NAME_EXTENSION
 )
 OBSERVABLE_COLOR_RE = re.compile('(?P<observable>[^{]+){(?P<color>[a-z]+)}')
 EXPORTED_IMAGES_SUBFOLDER_NAME = 'Images'
@@ -55,7 +55,7 @@ def _chunk_count(re_group_name: str, image_files_paths: list) -> int:
     return len({
         matched_file_name.group(re_group_name)
         for path in image_files_paths
-        if (matched_file_name := EXPORTED_IMAGE_NAME_RE.search(path.name)) is not None
+        if (matched_file_name := EXPORTED_IMAGE_FILE_NAME_RE.search(path.name)) is not None
     })
 
 def determine_channels_count(image_files_paths: list) -> int:
@@ -115,10 +115,10 @@ def assemble_image_file_name(
     fl: str = '1'
 ) -> str:
     image_file_name = (
-        f"r{row}c{column}f{field}p{plane}"
+        f"r{row:02d}c{column:02d}f{field:02}p{plane:02d}"
         "-"
         f"ch{channel}sk{timepoint}fk{fk}fl{fl}"
-        f"{EXPORTED_IMAGE_NAME_EXTENSION}"
+        f"{EXPORTED_IMAGE_FILE_NAME_EXTENSION}"
     )
     return image_file_name
 
@@ -469,11 +469,11 @@ def field_number_to_xy(image_file_name: str, images_layout_info: pd.DataFrame) -
             image_layout_info = images_layout_info.loc[replacement_image_file_name]
         else:
             # try with any alternative with the field index matching
-            re_match = EXPORTED_IMAGE_NAME_RE.match(image_file_name)
+            re_match = EXPORTED_IMAGE_FILE_NAME_RE.match(image_file_name)
             assert re_match
             field = re_match.group('field')
             for any_image_file_name in images_layout_info.index:
-                any_re_match = EXPORTED_IMAGE_NAME_RE.match(any_image_file_name)
+                any_re_match = EXPORTED_IMAGE_FILE_NAME_RE.match(any_image_file_name)
                 assert any_re_match
                 if any_re_match.group('field') == field:
                     if any_image_file_name in images_layout_info.index:
