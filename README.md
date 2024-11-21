@@ -1,7 +1,7 @@
 Overview
 ========
 
-Python module **maestro** provides command-line utilities to organize and process images acquired with a high-throughput microplate imager, Operetta CLS (from PerkinElmer).
+Python module **maestro** provides command-line utilities to organize and process images acquired with a high-throughput microplate imagers from PerkinElmer, Opera and Operetta.
 
 Maestro works directly on image data plus metadata exported by Harmony software and is capable of:
 
@@ -95,17 +95,22 @@ The optimal Z slice selection algorithm finds the Z, at which a laplacian-transf
 
 
 
-### Step 1: Export &rarr; Tiles (flat-field correction)
+### Image processing
+
+By default, images from all the plate wells are processed. You may however select only a subset of wells. To this end, use `--well` _WELL_SPEC_, where _WELL_SPEC_ is either a list of comma-separated well IDs (e.g., `--well 0202,0203,0204`) or a regular expression (e.g., `--well 020[234]`).
+
+
+#### Step 1: Export &rarr; Tiles (flat-field correction)
 
 Option `--correct` (added by default, use `--no-correct` to disable).
 
-The first step of the pipeline begins with the extraction of flat-field correction profiles from metadata (file Index.idx.xml contains bivariate polynomial coefficients, which appear to be derived by some auxiliary microscope software, Acapella). Then, fluorescence channel images are flat-field corrected and individual channels for a single field-of-view become frames of one multi-frame grayscale TIFF file. An original channel order is retained. The output file is named in a manner that encodes tile grid position indices and in this way is conformant with the standard ImageJ "Grid/Collection stitching" plugin.
+The first step of the pipeline begins with the extraction of flat-field correction profiles from metadata (file Index.idx.xml contains bivariate polynomial coefficients, which appear to be derived by some auxiliary microscope software, Acapella). Then, fluorescence channel images are flat-field corrected and individual channels (as wells as Z planes, if available) for a single field-of-view become frames of one multi-frame grayscale TIFF file. An original channel order is retained (as is the order of planes, if they are available). The output file is named in a manner that encodes tile grid position indices and in this way is conformant with the standard ImageJ "Grid/Collection stitching" plugin.
 
 If an output tile file exists, it is not re-generated and overwritten until the option `--force-correct` is passed.
 
 
 
-### Step 2: Tiles &rarr; Stitches (stitching)
+#### Step 2: Tiles &rarr; Stitches (stitching)
 
 Option `--stitch` (added by default, use `--no-stitch` to disable).
 
@@ -125,15 +130,13 @@ If tiles should be removed after assembling a stitched image, use option `--remo
 
 
 
-### Step 3: Stitches &rarr; Remixes (remixing)
+#### Step 3: Stitches &rarr; Remixes (remixing)
 
 Option `--remix` (added by default, use `--no-remix` to disable).
 
-Generation of so-called remixes involves: (i) affine adjustment of the dynamic range of pixel intensities, (ii) conversion from 16-bit to 8-bit depth with a simple scaling of pixel intensities, (iii) pseudo-coloring of individual channel images.
-
+Generation of so-called remixes involves: (i) affine adjustment of the dynamic range of pixel intensities, (ii) conversion from 16-bit to 8-bit depth with a simple scaling of pixel intensities, (iii) pseudo-coloring of individual channel images in multi-channel overlays.
 
 Affine adjustments are given in the normalization section of the configuration file, either as a pair of numbers comprising a subtracted (background) intensity value and a multiplicative factor (usually > 1) or the range of intensity percentages (0% is just 0, whereas 100% corresponds to the maximum possible value of 2^16 - 1, because the 16-bit depth is assumed). The list and exact definition of overlaid channels and their respective pseudo-colors is provided in the config file in section Remixes. Available pseudo-colors are: gray, red, green, blue, cyan, magenta, yellow.
-
 
 Well information provided in and extracted from the plate layout definition may be used to annotate remixes by burning in textual information in top-left image corner. To annotate remixes, add option `--annotate-remixes-with-wells-info`.
 
@@ -145,7 +148,7 @@ If stitched images should be removed after remixing, use option `--remove-interm
 
 
 
-### Step 4: Remixes &rarr; Movies (encoding)
+#### Step 4: Remixes &rarr; Movies (encoding)
 
 Option `--encode` (added by default, use `--no-encode` to disable).
 
@@ -183,7 +186,7 @@ Normalization:
     polyic: -5635, *7.8
 
 Remixes:
-    downscale:  False
+    downscale:  True
     multi_channel:
         - p65{green} + polyic{magenta}
     single_channel:
@@ -192,12 +195,12 @@ Remixes:
         - p65
         - polyic
 ```
-(an immunostaining from 2024-04-04 by Juan Alfonso Redondo Marin).
+(an immunostaining from 2024-04-04 by Juan Alfonso Redondo Marín).
 
 The four sections above are obligatory. You may also include optional sections:
 ```
 Annotations:
-    font_size: 32pt  # default is 96pt
+    font_size: 32pt  # default is 96pt, smaller font more suitable when downscaling
 
 Movies:
     realtime_speedup: 60x  # one minute of the real time -> one second of the movie
