@@ -44,13 +44,14 @@ import shutil
 import string
 import re
 import random
+from operator import itemgetter
 from itertools import product
-from collections import Counter
+from collections import Counter, defaultdict
 from time import sleep
 from datetime import timedelta
 import pickle
 from pathlib import Path
-from typing import List, Dict, Tuple, Literal
+from typing import List, Dict, Tuple, Literal, Optional
 import subprocess as sp
 from multiprocessing import Process, Queue
 import tarfile
@@ -64,26 +65,29 @@ from tqdm import tqdm
 import tifffile
 import cv2
 
-from operetta import OPERETTA_IMAGES_SUBFOLDER_NAME
-from operetta import OPERETTA_IMAGES_INDEX_FILE_NAME
-from operetta import OPERETTA_IMAGE_NAME_RE
-from operetta import OPERETTA_IMAGE_NAME_EXTENSION
-from operetta import OPERETTA_OBSERVABLE_COLOR_RE
-from operetta import OPERETTA_EXTRA_TILE_OVERLAP
-from operetta import WellLocation
-from operetta import assemble_image_file_name
-from operetta import get_image_files_paths
-from operetta import determine_timepoints_count
-from operetta import determine_fields_count
-from operetta import determine_fields_layout
-from operetta import field_number_to_xy
-from operetta import determine_channels_count
-from operetta import extract_plate_layout
-from operetta import extract_wells_info
-from operetta import extract_channels_info
-from operetta import extract_image_acquisition_settings
-from operetta import extract_time_interval
-from operetta import extract_and_derive_images_layout
+from operetta import (
+    EXPORTED_IMAGES_SUBFOLDER_NAME,
+    EXPORTED_IMAGE_NAME_RE,
+    EXPORTED_IMAGE_NAME_EXTENSION,
+    OBSERVABLE_COLOR_RE,
+    EXTRA_TILE_OVERLAP,
+    WellLocation,
+    assemble_image_file_name,
+    get_images_index_file_path,
+    get_image_files_paths,
+    determine_timepoints_count,
+    determine_planes_count,
+    determine_fields_count,
+    determine_fields_layout,
+    determine_channels_count,
+    field_number_to_xy,
+    extract_plate_layout,
+    extract_wells_info,
+    extract_channels_info,
+    extract_image_acquisition_settings,
+    extract_time_interval,
+    extract_and_derive_images_layout,
+)
 
 COLOR_COMPONENTS = {
     'red':     'R',
@@ -152,29 +156,27 @@ pd.set_option('display.max_columns', None)
 def _group_paths_by(
     files_paths: List[Path],
     chunk_re: str,
-) -> List[Tuple[str, List[Path]]]:
+) -> List[Tuple[int, List[Path]]]:
 
     assert '<groupby>' in chunk_re
     groupby_re = re.compile(chunk_re)
 
-    grouped_files_paths: Dict[str, List[Path]] = {}
+    grouped_files_paths: Dict[int, List[Path]] = defaultdict(list)
     for file_path in files_paths:
         groupby_search = groupby_re.search(file_path.name)
         assert groupby_search is not None
-        by = groupby_search.group('groupby')
-        if by not in grouped_files_paths:
-            grouped_files_paths[by] = []
+        by = int(groupby_search.group('groupby'))
         grouped_files_paths[by].append(file_path)
-        grouped_files_paths[by] = sorted(grouped_files_paths[by])
 
-    return list(sorted(grouped_files_paths.items(), key=lambda _: _[0]))
+    grouped_files_paths = {by: sorted(paths) for by, paths in grouped_files_paths.items()}
+    return list(sorted(grouped_files_paths.items(), key=itemgetter(0)))
 
 
 
 def _prepare_flatfield_correction_images(
     channels_info: pd.DataFrame,
-    image_shape: tuple,
-) -> dict:
+    image_shape: Tuple[int, int],
+) -> Dict[int, np.ndarray]:
 
     assert image_shape[0]*image_shape[1] > 1, "A stub of an image encountered."
 
@@ -236,6 +238,63 @@ def _flatfield_correct(
 
 
 
+def _correct_tile(
+    orig_image_file_path: Path,
+    image_shape: Tuple[int, int],
+    image_dtype,
+    images_layout: pd.DataFrame,
+    tiles_folder_path: Path,
+    address: Dict[str, int],  # passed for consistency checks
+    ffc_profile_images: Optional[Dict[int, np.ndarray]],
+    force: bool,
+) -> Tuple[Path, Path]:
+
+    row, column, field, plane, timepoint, channel = map(int, [
+        image_file_name_match.group(chunk_name)
+        for chunk_name in ('row', 'column', 'field', 'plane', 'timepoint', 'channel')
+        if (image_file_name_match := EXPORTED_IMAGE_NAME_RE.search(orig_image_file_path.name)) \
+            is not None
+    ])
+    assert row == address['row'] and column == address['column']
+    assert timepoint == address['timepoint']
+    assert field == address['field']
+    assert plane == address['plane']
+    assert channel == address['channel']
+
+    field_ix, field_iy = field_number_to_xy(orig_image_file_path.name, images_layout)
+
+    # Note: All indices, including those of timepoints, planes, and channels, become 0-based.
+    corr_image_file_name = f"Img_t{timepoint - 1:04d}" \
+                           f"_x{field_ix}_y{field_iy}" \
+                           f"_z{plane - 1}"            \
+                           f"_c{channel - 1}"          \
+                            ".tif"
+    corr_image_file_path = tiles_folder_path / corr_image_file_name
+
+    multi_corr_image_file_name = re.sub('_z[0-9]+_c[0-9]+', '', corr_image_file_name)
+    multi_corr_image_file_path = corr_image_file_path.parent / multi_corr_image_file_name
+
+    if not force and multi_corr_image_file_path.exists() \
+                 and multi_corr_image_file_path.stat().st_size > 0:
+        return corr_image_file_path, multi_corr_image_file_path
+
+    if not force and corr_image_file_path.exists() \
+                 and corr_image_file_path.stat().st_size > 0:
+        return corr_image_file_path, multi_corr_image_file_path
+
+    if ffc_profile_images:
+        _flatfield_correct(orig_image_file_path, corr_image_file_path,
+                           ffc_profile_images[channel], image_shape, image_dtype)
+    else:
+        if platform.system().lower() == 'linux':
+            corr_image_file_path.symlink_to(orig_image_file_path.absolute())
+        else:
+            shutil.copy(orig_image_file_path, corr_image_file_path)
+
+    return corr_image_file_path, multi_corr_image_file_path
+
+
+
 def correct_tiles(
     well_id: str,
     well_loc: WellLocation,
@@ -245,7 +304,7 @@ def correct_tiles(
     tiles_folder_path: Path,
     force: bool = False,
     apply_flatfield_correction: bool = True,
-    clean_up_single_channel_tiles: bool = True,
+    clean_up_single_channel_single_plane_tiles: bool = True,
     compress_output_tif: bool = False,
 ) -> None:
     '''
@@ -260,12 +319,10 @@ def correct_tiles(
     tiles_folder_path.mkdir(exist_ok=True, parents=True)
 
     if apply_flatfield_correction:
-
         for an_image_path in well_orig_image_files_paths:
             an_image_path_str = str(an_image_path.absolute())
             an_image = cv2.imread(an_image_path_str, cv2.IMREAD_UNCHANGED)
             image_shape, image_dtype = an_image.shape, an_image.dtype
-
             if image_shape[0]*image_shape[1] == 1:
                 print(f"Warning: Image file '{an_image_path.name}' has just one pixel!")
                 continue
@@ -275,73 +332,57 @@ def correct_tiles(
 
         disclosure = ''
     else:
+        ffc_profile_images = None
         disclosure = 'non-'
 
-    well_orig_img_paths_gby_tpoint = _group_paths_by(well_orig_image_files_paths,
-                                                     r'sk(?P<groupby>[0-9]+)')
-    for _tpoint, tpoint_well_orig_img_paths in tqdm(
-        well_orig_img_paths_gby_tpoint,
+    by = {
+        't': r'sk(?P<groupby>[0-9]+)',
+        'f': r'f(?P<groupby>[0-9]+)',
+        'p': r'p(?P<groupby>[0-9]+)',
+        'ch': r'-ch(?P<groupby>[0-9])',
+    }
+
+    well_orig_image_paths_gby_timepoint = _group_paths_by(well_orig_image_files_paths, by['t'])
+    for group_timepoint, t_paths in tqdm(
+        well_orig_image_paths_gby_timepoint,
         desc=f"[{well_id}] {CORRTILES_FOLDER_BASE_NAME}: {disclosure}correcting:",
         **TQDM_STYLE
     ):
-        tpoint_well_orig_img_paths_gby_field = _group_paths_by(tpoint_well_orig_img_paths,
-                                                               r'(?P<groupby>f[0-9]+)')
-        for _well, field_tpoint_orig_img_paths in tpoint_well_orig_img_paths_gby_field:
+        for group_field, ft_paths in _group_paths_by(t_paths, by['f']):
 
-            # effectively, the loop below goes over all field-channels
-            field_tpoint_corr_images_paths = []
-            for orig_image_file_path in field_tpoint_orig_img_paths:
+            corr_images_file_paths = []
+            for group_plane, zft_img_paths in _group_paths_by(ft_paths, by['p']):
+                for solo_channel, czft_img_paths in _group_paths_by(zft_img_paths, by['ch']):
+                    for orig_image_file_path in czft_img_paths:
+                        corr_image_file_path, multi_corr_image_file_path = _correct_tile(
+                            orig_image_file_path,
+                            image_shape=image_shape,
+                            image_dtype=image_dtype,
+                            images_layout=images_layout,
+                            tiles_folder_path=tiles_folder_path,
+                            address={
+                                'row': well_loc.row,
+                                'column': well_loc.column,
+                                'timepoint': int(group_timepoint),
+                                'field': int(group_field),
+                                'plane': int(group_plane),
+                                'channel': int(solo_channel),
+                            },
+                            ffc_profile_images=ffc_profile_images,
+                            force=force,
+                        )
+                        corr_images_file_paths.append(corr_image_file_path)
 
-                row, column, channel, timepoint = map(int, [
-                    image_file_name_match.group(chunk_name)
-                    for chunk_name in ('row', 'column', 'channel', 'timepoint')
-                    if (image_file_name_match := OPERETTA_IMAGE_NAME_RE.search(
-                                                             orig_image_file_path.name)) is not None
-                ])
-                assert well_loc == WellLocation(row=row, column=column)
-
-                # Note: All indices (including: timepoint indices, channel indices) become 0-based.
-                field_ix, field_iy = field_number_to_xy(orig_image_file_path.name, images_layout)
-                corr_image_file_name = f"Img_t{timepoint - 1:04d}" \
-                                       f"_x{field_ix}_y{field_iy}" \
-                                       f"_c{channel - 1:1d}"       \
-                                       ".tif"
-                corr_image_file_path = tiles_folder_path / corr_image_file_name
-                multichannel_corr_image_file_path = corr_image_file_path.parent / re.sub('_c[0-9]+',
-                                                                           '', corr_image_file_name)
-
-                if not force and multichannel_corr_image_file_path.exists() \
-                             and multichannel_corr_image_file_path.stat().st_size > 0:
-                    break
-
-                if not force and corr_image_file_path.exists() \
-                             and corr_image_file_path.stat().st_size > 0:
-                    continue
-
-                if apply_flatfield_correction:
-                    _flatfield_correct(orig_image_file_path, corr_image_file_path,
-                                       ffc_profile_images[channel], image_shape, image_dtype)
-                else:
-                    if platform.system().lower() == 'linux':
-                        corr_image_file_path.symlink_to(orig_image_file_path.absolute())
-                    else:
-                        shutil.copy(orig_image_file_path, corr_image_file_path)
-                field_tpoint_corr_images_paths.append(corr_image_file_path)
-
-            if not force and multichannel_corr_image_file_path.exists() \
-                         and multichannel_corr_image_file_path.stat().st_size > 0:
-                continue
-
-            # generate a multi-page tiff file
-            src_files_paths_s = [str(f.absolute()) for f in field_tpoint_corr_images_paths]
-            dst_file_path_s = str(multichannel_corr_image_file_path)
-            compress_args = ['-compress', 'lzw'] if compress_output_tif else ['-compress', 'none']
+            # generate a multi-page TIFF file
+            src_files_paths_s = [str(f.absolute()) for f in corr_images_file_paths]
+            dst_file_path_s = str(multi_corr_image_file_path)
+            compress_args = ['-compress', 'lzw' if compress_output_tif else 'none']
             cmd = [CONVERT_EXE_PATH_S, *src_files_paths_s, *compress_args, dst_file_path_s]
             sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True)
 
-            #  if symlinks to original images or ff-corrected images are no longer needed
-            if clean_up_single_channel_tiles:
-                for tile_image_path in field_tpoint_corr_images_paths:
+            #  if symlinks to original images or corrected images are no longer needed
+            if clean_up_single_channel_single_plane_tiles:
+                for tile_image_path in corr_images_file_paths:
                     tile_image_path.unlink()
 
 
@@ -473,7 +514,7 @@ def stitch_tiles(
                     'N_FIELDS_Y': n_fields_y,
                     'TILES_FOLDER': str(src_tiles_folder.absolute()),
                     'STITCHES_FOLDER': str(stitches_folder_path.absolute()),
-                    'TILE_OVERLAP': tile_overlap + OPERETTA_EXTRA_TILE_OVERLAP,
+                    'TILE_OVERLAP': tile_overlap + EXTRA_TILE_OVERLAP,
                     'DOWNSCALE': str(downscale).lower(),
                 }
                 _generate_fiji_stitching_script(fiji_script_path_s, **substitutions)
@@ -880,34 +921,34 @@ def encode_movies(
 
 
 def _place_image_files_in_their_respective_well_folders(
-    operetta_images_folder: Path,
+    images_folder: Path,
     abolish_internal_compression: bool = True,
     tolerate_extra_files: bool = False,
     retain_original_files: bool = False,
 ) -> List[Path]:
 
-    operetta_images_folder_path = Path(operetta_images_folder)
-    assert operetta_images_folder_path.exists(), \
-        f"Error: The source folder '{operetta_images_folder_path.absolute()}' does not exist!"
+    images_folder_path = Path(images_folder)
+    assert images_folder_path.exists(), \
+        f"Error: The source folder '{images_folder_path.absolute()}' does not exist!"
 
-    if operetta_images_folder_path.resolve().name != OPERETTA_IMAGES_SUBFOLDER_NAME:
+    if images_folder_path.resolve().name != EXPORTED_IMAGES_SUBFOLDER_NAME:
         print("Error: The argument OPERETTA_IMAGES_FOLDER_PATH "
-              f"should point to a folder named '{OPERETTA_IMAGES_SUBFOLDER_NAME}'!")
+              f"should point to a folder named '{EXPORTED_IMAGES_SUBFOLDER_NAME}'!")
         return []
 
     # the index file is not required currently, but lack thereof is perceived suspicious
-    if not (operetta_images_folder_path / OPERETTA_IMAGES_INDEX_FILE_NAME).exists():
-        print(f"Error: The folder does not contain '{OPERETTA_IMAGES_INDEX_FILE_NAME}'!")
+    if get_images_index_file_path(images_folder_path.parent) is None:
+        print("Error: The images folder does not contain any index XML file!")
         return []
 
     files_paths = [
-        item for item in operetta_images_folder_path.iterdir()
+        item for item in images_folder_path.iterdir()
         if item.is_file() and not item.is_symlink()
     ]
 
     image_files_paths = [
         file_path for file_path in files_paths
-        if OPERETTA_IMAGE_NAME_RE.match(
+        if EXPORTED_IMAGE_NAME_RE.match(
             re.sub('.orig$', '', file_path.name)   # accepting both '*.tiff' and '*.tiff.orig'
         )
     ]
@@ -915,7 +956,7 @@ def _place_image_files_in_their_respective_well_folders(
     # the folder is impure, refuse to continue just in case
     if len(files_paths) != len(image_files_paths) + 1:
         message_type, end_mark = ('Warning', '.') if tolerate_extra_files else ('Error', '!')
-        print(f"{message_type}: The source folder '{operetta_images_folder_path.absolute()}' "
+        print(f"{message_type}: The source folder '{images_folder_path.absolute()}' "
               f"appears to contain some extra files{end_mark}")
         if not tolerate_extra_files:
             return []
@@ -924,7 +965,7 @@ def _place_image_files_in_their_respective_well_folders(
     # -- build {(row, col): [list of all images of the well in the (row, col)]} --------------------
 
     def extract_row_col_(path: Path) -> tuple:
-        image_name_match = OPERETTA_IMAGE_NAME_RE.search(path.name)
+        image_name_match = EXPORTED_IMAGE_NAME_RE.search(path.name)
         assert image_name_match is not None
         return tuple(map(image_name_match.group, ['row', 'column']))
 
@@ -947,14 +988,14 @@ def _place_image_files_in_their_respective_well_folders(
 
     for (row, col), image_files in sorted(wells_images.items()):
 
-        dest_dir_path = operetta_images_folder_path / assemble_well_folder_name_(row, col)
+        dest_dir_path = images_folder_path / assemble_well_folder_name_(row, col)
         if dest_dir_path.exists():
             print(f"Warning: destination folder {dest_dir_path.absolute()} already exists!")
         dest_dir_path.mkdir(exist_ok=False, parents=False)
 
-        desc = f"{OPERETTA_IMAGES_SUBFOLDER_NAME}/[{len(image_files)} images]" \
+        desc = f"{EXPORTED_IMAGES_SUBFOLDER_NAME}/[{len(image_files)} images]" \
                f" ⤚({transfer_file.__name__})→ " \
-               f"{OPERETTA_IMAGES_SUBFOLDER_NAME}/{dest_dir_path.name}:"
+               f"{EXPORTED_IMAGES_SUBFOLDER_NAME}/{dest_dir_path.name}:"
         for image_file in tqdm(image_files, desc=desc, **TQDM_STYLE):
             assert image_file.exists()
             transfer_file(image_file, dest_dir_path)
@@ -968,7 +1009,7 @@ def _place_image_files_in_their_respective_well_folders(
                 sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True)
 
     wells_folders_paths = list(sorted([
-        operetta_images_folder_path / assemble_well_folder_name_(row, col)
+        images_folder_path / assemble_well_folder_name_(row, col)
         for row, col in wells_images
     ]))
 
@@ -977,17 +1018,17 @@ def _place_image_files_in_their_respective_well_folders(
 
 
 def _extract_xml_metadata(
-    operetta_export_folder_path: Path,
+    export_folder_path: Path,
     results: Queue,
 ) -> None:
 
     print('Info: Extracting metadata ... ', end='', flush=True)
 
-    plate_layout: dict = extract_plate_layout(operetta_export_folder_path)
-    wells_info: pd.DataFrame = extract_wells_info(operetta_export_folder_path)
-    channels_info = extract_channels_info(operetta_export_folder_path)
-    images_layout = extract_and_derive_images_layout(operetta_export_folder_path)
-    time_interval = extract_time_interval(operetta_export_folder_path)
+    plate_layout: dict = extract_plate_layout(export_folder_path)
+    wells_info: pd.DataFrame = extract_wells_info(export_folder_path)
+    channels_info = extract_channels_info(export_folder_path)
+    images_layout = extract_and_derive_images_layout(export_folder_path)
+    time_interval = extract_time_interval(export_folder_path)
 
     print('done', flush=True)
 
@@ -996,7 +1037,7 @@ def _extract_xml_metadata(
 
 
 def select_best_focus_planes(
-    operetta_images_folder_path: Path
+    images_folder_path: Path
 ) -> None:
     '''A remaster's "before" operation.'''
 
@@ -1018,20 +1059,20 @@ def select_best_focus_planes(
         return best_focus_image_path
 
     # the experiment folder
-    operetta_export_folder_path = Path(operetta_images_folder_path)
-    assert operetta_export_folder_path.exists()
+    export_folder_path = Path(images_folder_path)
+    assert export_folder_path.exists()
 
     # the source images folder within the experiment folder
-    original_images_folder_path = operetta_export_folder_path / OPERETTA_IMAGES_SUBFOLDER_NAME
+    original_images_folder_path = export_folder_path / EXPORTED_IMAGES_SUBFOLDER_NAME
     assert original_images_folder_path.exists()
 
     # the original images folder, renamed
-    source_images_folder_name = f"{OPERETTA_IMAGES_SUBFOLDER_NAME}--original"
-    source_images_folder_path = operetta_export_folder_path / source_images_folder_name
+    source_images_folder_name = f"{EXPORTED_IMAGES_SUBFOLDER_NAME}--original"
+    source_images_folder_path = export_folder_path / source_images_folder_name
 
     # the selection folder
-    destination_images_folder_name = f"{OPERETTA_IMAGES_SUBFOLDER_NAME}--selection"
-    destination_images_folder_path = operetta_export_folder_path / destination_images_folder_name
+    destination_images_folder_name = f"{EXPORTED_IMAGES_SUBFOLDER_NAME}--selection"
+    destination_images_folder_path = export_folder_path / destination_images_folder_name
     if destination_images_folder_path.exists():
         print(f"Note: Folder '{destination_images_folder_name}' exists (skipping plane selection)")
         return
@@ -1045,7 +1086,7 @@ def select_best_focus_planes(
     source_image_file_paths = [
         path
         for path in source_images_folder_path.iterdir()
-        if path.name.endswith(OPERETTA_IMAGE_NAME_EXTENSION)
+        if path.name.endswith(EXPORTED_IMAGE_NAME_EXTENSION)
     ]
 
     chunk_indices: Dict[str, set] = {
@@ -1053,7 +1094,7 @@ def select_best_focus_planes(
         for chunk_name in 'row column field plane channel timepoint'.split()
     }
     for image_path in source_image_file_paths:
-        image_file_name_match = OPERETTA_IMAGE_NAME_RE.search(image_path.name)
+        image_file_name_match = EXPORTED_IMAGE_NAME_RE.search(image_path.name)
         assert image_file_name_match is not None
         for chunk_name in chunk_indices.keys():
             chunk_index = image_file_name_match.group(chunk_name)
@@ -1088,15 +1129,18 @@ def select_best_focus_planes(
         else:
             print(f"Warning: group {z_group_named_indices} skipped")
 
-    print(f"Info: Symlinking: '{OPERETTA_IMAGES_SUBFOLDER_NAME}'"
+    print(f"Info: Symlinking: '{EXPORTED_IMAGES_SUBFOLDER_NAME}'"
           f" --> '{destination_images_folder_path.name}' ... ", end='', flush=True)
 
     # Images--selection/Index.idx.xml --> ../Images--original/Index.idx.xml
-    (destination_images_folder_path / OPERETTA_IMAGES_INDEX_FILE_NAME).symlink_to \
-        (Path('..') / source_images_folder_path.name  / OPERETTA_IMAGES_INDEX_FILE_NAME)
+    images_index_file_path = get_images_index_file_path(images_folder_path.parent)
+    assert images_index_file_path is not None
+    images_index_file_name = images_index_file_path.name
+    (destination_images_folder_path / images_index_file_name).symlink_to \
+        (Path('..') / source_images_folder_path.name / images_index_file_name)
 
     # Images --> Images--selection
-    Path(destination_images_folder_path.parent / OPERETTA_IMAGES_SUBFOLDER_NAME).symlink_to\
+    Path(destination_images_folder_path.parent / EXPORTED_IMAGES_SUBFOLDER_NAME).symlink_to\
         (destination_images_folder_path.name)
 
     print('done')
@@ -1163,11 +1207,11 @@ def rename_single_timepoint_remixes_by_well_id(
 
 
 def show_wells(
-    operetta_export_folder_path: Path,
+    export_folder_path: Path,
     simple: bool,
 ) -> None:
 
-    wells_info = extract_wells_info(operetta_export_folder_path)
+    wells_info = extract_wells_info(export_folder_path)
     wells_info_str= '\n' .join(wells_info['WellId']) if simple else \
         wells_info.to_string(max_cols=100)
     print(wells_info_str)
@@ -1175,11 +1219,11 @@ def show_wells(
 
 
 def show_channels(
-    operetta_export_folder_path: Path,
+    export_folder_path: Path,
     simple: bool,
 ) -> None:
 
-    channels_info = extract_channels_info(operetta_export_folder_path)
+    channels_info = extract_channels_info(export_folder_path)
     channels_info_str = '\n'.join(channels_info['Name']) if simple else \
         channels_info.to_string(max_colwidth=48)
     print(channels_info_str)
@@ -1187,15 +1231,15 @@ def show_channels(
 
 
 def show_settings(
-    operetta_export_folder_path: Path,
+    export_folder_path: Path,
     simple: bool,
 ) -> None:
 
     general_settings_info, channel_settings_info = \
-        extract_image_acquisition_settings(operetta_export_folder_path)
+        extract_image_acquisition_settings(export_folder_path)
 
     if not simple:
-        channels_info = extract_channels_info(operetta_export_folder_path)
+        channels_info = extract_channels_info(export_folder_path)
         channel_settings_info = channel_settings_info.join(channels_info['Name'])
         channel_settings_info = channel_settings_info[[
             'Name', 'Excitation [nm]', 'Emission [nm]', 'Exposure [s]'
@@ -1217,11 +1261,11 @@ def commands():
 
 
 @click.command()
-@click.argument('operetta_export_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
+@click.argument('export_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
 @click.argument('config_file', type=CLICK_EXISTING_FILE_PATH_TYPE)
 @click.argument('output_root_folder', type=click.Path(), default=Path.cwd())
 def trackerabilize(
-    operetta_export_folder: Path,
+    export_folder: Path,
     config_file: Path,
     output_root_folder: Path,
 ) -> None:
@@ -1235,10 +1279,10 @@ def trackerabilize(
     single_channel_remix_re = re.compile(r'Img_t[0-9]{4}--(?P<observable>[A-Za-z0-9]+)[^-_]*'
                                          r'\.(png|tiff?)')
 
-    operetta_export_folder_path = Path(operetta_export_folder)
-    output_root_folder_path = Path(output_root_folder)
+    export_folder_path = Path(export_folder)
+    assert export_folder_path.exists()
 
-    assert operetta_export_folder_path.exists()
+    output_root_folder_path = Path(output_root_folder)
 
 
     print("Info: Extracting metadata ... ", flush=True)
@@ -1252,23 +1296,23 @@ def trackerabilize(
         print("Error: No pseudocolors given in the config file!")
         print("Hint: Provide a dummy multi-channel remix to define pseudocolors for all channels.")
         return
-    channels_info: pd.DataFrame = extract_channels_info(operetta_export_folder_path)
+    channels_info: pd.DataFrame = extract_channels_info(export_folder_path)
     channels_info['Observable'] = channels_info['Name'].map(config['Observables'])
     observables_colors: dict = {}
     for overlay_s in config['Remixes']['multi_channel']:
         observables_colors |= dict(
             map(obs_col_re_match.group, ['observable', 'color'])
             for oc in list(map(lambda s: s.strip(), overlay_s.split('+')))
-            if (obs_col_re_match := OPERETTA_OBSERVABLE_COLOR_RE.search(oc)) is not None
+            if (obs_col_re_match := OBSERVABLE_COLOR_RE.search(oc)) is not None
         )
     channels_info['Color'] = channels_info['Observable'].map(observables_colors)
     colors = channels_info[~channels_info['Color'].isnull()].reset_index().set_index('Observable')
 
     # wells info
-    wells_info: pd.DataFrame = extract_wells_info(operetta_export_folder_path)
+    wells_info: pd.DataFrame = extract_wells_info(export_folder_path)
 
     # time interval
-    delta_t = extract_time_interval(operetta_export_folder_path)
+    delta_t = extract_time_interval(export_folder_path)
 
     print("Info: Extracting metadata ... done ", flush=True)
     print("Info: Creating ShuttleTracker-viewable folders ... ", flush=True)
@@ -1342,11 +1386,11 @@ commands.add_command(trackerabilize)
 
 @click.command()
 @click.argument('what', type=click.Choice(['wells', 'channels', 'settings']))
-@click.argument('operetta_export_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
+@click.argument('export_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
 @click.option('--simple', type=bool, is_flag=True, default=False, show_default=True,
               help="print one (simplified) item per line")
 def show(
-    operetta_export_folder: Path,
+    export_folder: Path,
     what: Literal['wells', 'channels'],
     simple: bool = False,
 ) -> None:
@@ -1354,16 +1398,16 @@ def show(
     Inspect contents (wells, channels, microscope settings).
     '''
 
-    operetta_export_folder_path = Path(operetta_export_folder)
+    export_folder_path = Path(export_folder)
 
     if what == 'channels':
-        show_channels(operetta_export_folder_path, simple)
+        show_channels(export_folder_path, simple)
 
     elif what == 'wells':
-        show_wells(operetta_export_folder_path, simple)
+        show_wells(export_folder_path, simple)
 
     elif what == 'settings':
-        show_settings(operetta_export_folder_path, simple)
+        show_settings(export_folder_path, simple)
 
     else:
         print(f"Error: Don't know how to show '{what}'.")
@@ -1373,7 +1417,7 @@ commands.add_command(show)
 
 
 @click.command()
-@click.argument('operetta_export_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
+@click.argument('export_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
 @click.argument('config_file', type=CLICK_EXISTING_FILE_PATH_TYPE)
 @click.argument('output_folder', type=click.Path(exists=False), default=Path.cwd())
 @click.option('--well', default=None,
@@ -1409,7 +1453,7 @@ commands.add_command(show)
                   rename_single_timepoint_remixes_by_well_id.__name__,
               ]))
 def remaster(
-    operetta_export_folder: Path,
+    export_folder: Path,
     config_file: Path,
     output_folder: Path,
     well: str | None,
@@ -1431,16 +1475,16 @@ def remaster(
     '''
 
     # input experiment folder
-    operetta_export_folder_path = Path(operetta_export_folder)
-    assert operetta_export_folder_path.exists()
-    print(f"Info: Export folder: '{operetta_export_folder_path.absolute()}'")
+    export_folder_path = Path(export_folder)
+    assert export_folder_path.exists()
+    print(f"Info: Export folder: '{export_folder_path.absolute()}'")
 
     # image pre-processing
     if before:
         if 'fix_single_pixel_images' in before:
-            _check(operetta_export_folder_path, fix_single_pixel_and_illegible_images=True)
+            _check(export_folder_path, fix_single_pixel_and_illegible_images=True)
         if select_best_focus_planes.__name__ in before:
-            select_best_focus_planes(operetta_export_folder_path)
+            select_best_focus_planes(export_folder_path)
 
     # config file
     config_file_path = Path(config_file)
@@ -1459,7 +1503,7 @@ def remaster(
     results_queue: Queue = Queue()
     parse_process = Process(
         target=_extract_xml_metadata,
-        args=(operetta_export_folder_path, results_queue)
+        args=(export_folder_path, results_queue)
     )
     parse_process.start()
     plate_layout, wells_info, channels_info, images_layout, time_interval = results_queue.get()
@@ -1551,7 +1595,7 @@ def remaster(
         print(32*'-', f"[ Well: {well_id} ]", 32*'-')
 
         # extract or infer statistics of image files in the current well
-        orig_images_folder_path = operetta_export_folder_path / OPERETTA_IMAGES_SUBFOLDER_NAME
+        orig_images_folder_path = export_folder_path / EXPORTED_IMAGES_SUBFOLDER_NAME
         well_orig_image_files_paths = get_image_files_paths(orig_images_folder_path, well_loc)
         if correct:
             assert len(well_orig_image_files_paths) > 0, \
@@ -1560,11 +1604,13 @@ def remaster(
 
         n_image_files = len(well_orig_image_files_paths)
         n_timepoints = determine_timepoints_count(well_orig_image_files_paths)
+        n_planes = determine_planes_count(well_orig_image_files_paths)
         n_fovs = determine_fields_count(well_orig_image_files_paths)
         n_fovs_x, n_fovs_y = determine_fields_layout(images_layout, well_loc)
         n_channels = determine_channels_count(well_orig_image_files_paths)
 
         print(f"[{well_id}] Number of timepoints: {n_timepoints if n_timepoints > 0 else '(?)'}.")
+        print(f"[{well_id}] Number of planes: {n_planes if n_planes > 0 else '(?)'}.")
         print(f"[{well_id}] Number of channels: {n_channels if n_channels > 0 else '(?)'}.")
         print(f"[{well_id}] Number of fields per well: {n_fovs if n_fovs > 0 else '(?)'}"
               + (f" (layout: {n_fovs_x}x{n_fovs_y})." if n_fovs > 0 else "."))
@@ -1668,7 +1714,7 @@ def remaster(
                 obs_to_color: Dict[str, str] = dict(
                     map(obs_color_re_match.group, ['observable', 'color'])
                     for oc in list(map(lambda s: s.strip(), overlay_s.split('+')))
-                    if (obs_color_re_match := OPERETTA_OBSERVABLE_COLOR_RE.search(oc)) is not None
+                    if (obs_color_re_match := OBSERVABLE_COLOR_RE.search(oc)) is not None
                 )
                 for obs, color in obs_to_color.items():
                     assert obs in channels_info['Observable'].values, \
@@ -1742,18 +1788,18 @@ commands.add_command(remaster)
 
 
 def _check(
-    operetta_export_folder: Path,
+    export_folder: Path,
     fix_single_pixel_and_illegible_images: bool = False,
 ) -> list:
 
-    operetta_export_folder_path = Path(operetta_export_folder)
-    assert operetta_export_folder_path.exists()
+    export_folder_path = Path(export_folder)
+    assert export_folder_path.exists()
 
-    images_folder_path = operetta_export_folder_path / OPERETTA_IMAGES_SUBFOLDER_NAME
+    images_folder_path = export_folder_path / EXPORTED_IMAGES_SUBFOLDER_NAME
     image_files_paths = get_image_files_paths(images_folder_path)
     print(f"Info: Image files count: {len(image_files_paths)}")
 
-    images_layout = extract_and_derive_images_layout(operetta_export_folder_path)
+    images_layout = extract_and_derive_images_layout(export_folder_path)
 
     images_not_in_layout, image_shapes = [], {}
     for image_file_path in tqdm(image_files_paths, desc='Info: Reading images ...', **TQDM_STYLE):
@@ -1801,11 +1847,11 @@ def _check(
 
 
 @click.command()
-@click.argument('operetta_export_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
+@click.argument('export_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
 @click.option('--fix-single-pixel-and-illegible-images', is_flag=True, default=False,
     show_default=True)
 def check(
-    operetta_export_folder: Path,
+    export_folder: Path,
     fix_single_pixel_and_illegible_images: bool = False,
 ) -> list:
     '''
@@ -1814,17 +1860,17 @@ def check(
     (2) images devoid of respective entries in metadata.
     '''
 
-    return _check(operetta_export_folder, fix_single_pixel_and_illegible_images)
+    return _check(export_folder, fix_single_pixel_and_illegible_images)
 
 commands.add_command(check)
 
 
 
 @click.command()
-@click.argument('operetta_images_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
+@click.argument('images_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
 @click.option('--retain-original-files', is_flag=True, default=False, show_default=True)
 def folderize(
-    operetta_images_folder: Path,
+    images_folder: Path,
     tolerate_extra_files: bool = False,
     retain_original_files: bool = False,
 ) -> list:
@@ -1833,7 +1879,7 @@ def folderize(
     '''
 
     return _place_image_files_in_their_respective_well_folders(
-        operetta_images_folder=operetta_images_folder,
+        images_folder=images_folder,
         tolerate_extra_files=tolerate_extra_files,
         retain_original_files=retain_original_files
     )
@@ -1843,13 +1889,13 @@ commands.add_command(folderize)
 
 
 @click.command()
-@click.argument('operetta_images_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
+@click.argument('images_folder', type=CLICK_EXISTING_FOLDER_PATH_TYPE)
 @click.option('--abolish-internal-compression', is_flag=True, default=True, show_default=True)
 @click.option('--tolerate-extra-files', is_flag=True, default=False, show_default=True)
 @click.option('--retain-original-files', is_flag=True, default=False, show_default=True)
 @click.option('--retain-well-folders', is_flag=True, default=False, show_default=True)
 def archivize(
-    operetta_images_folder: Path,
+    images_folder: Path,
     abolish_internal_compression: bool = True,
     tolerate_extra_files: bool = False,
     retain_original_files: bool = False,
@@ -1864,10 +1910,10 @@ def archivize(
     compresses the folders.
     '''
 
-    operetta_images_folder_path = Path(operetta_images_folder)
+    images_folder_path = Path(images_folder)
 
     wells_folders_paths = _place_image_files_in_their_respective_well_folders(
-        operetta_images_folder=operetta_images_folder_path,
+        images_folder=images_folder_path,
         abolish_internal_compression=abolish_internal_compression,
         tolerate_extra_files=tolerate_extra_files,
         retain_original_files=retain_original_files,

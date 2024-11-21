@@ -253,13 +253,6 @@ The images are decompressed directly in the Images folder (not in any well subfo
 
 
 
-Limitations
-===========
-
-The module has never been used to process Z-stacks (except for a built-in capability to select the best focused image in a Z stack).
-
-
-
 Authors and license
 ===================
 
