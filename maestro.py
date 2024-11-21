@@ -50,10 +50,11 @@ from time import sleep
 from datetime import timedelta
 import pickle
 from pathlib import Path
-from typing import List, Dict, Tuple, Literal
 import subprocess as sp
 from multiprocessing import Process, Queue
 import tarfile
+from xml.etree.ElementTree import Element, SubElement, tostring
+from typing import List, Dict, Tuple, Literal
 
 import psutil
 import yaml
@@ -222,11 +223,7 @@ def _read_exported_image(
             return image
         sleep(1 + random.choice(range(3)))
 
-    error_msg = f"Error reading image file '{str(image_file_path.absolute())}'!"
-    if image_shape is None:
-        raise IOError(error_msg)
-
-    print(error_msg)
+    print(f"Error reading image file '{str(image_file_path.absolute())}'!")
     return np.zeros(shape=image_shape, dtype=image_dtype)
 
 
@@ -244,6 +241,40 @@ def _flatfield_corrected(
 
     ffced_image = np.clip(ffced_image, 0, 2**bit_depth - 1)
     return ffced_image.astype(np.uint16)
+
+
+
+def _create_tile_ome_metadata(t: int, f: int, sizes: Dict[str, int]) -> str:
+
+    root = Element('OME', xmlns='http://www.openmicroscopy.org/Schemas/OME/2016-06')
+
+    image_name = f"Corrected tiles from timepoint: {t} at the original field: {f}"
+    image = SubElement(root, 'Image', ID='Image:0', Name=image_name)
+
+    # dimensions
+    pixels = SubElement(
+        image, 'Pixels', ID="Pixels:0", DimensionOrder="XYCZT", Type="uint16",
+        SizeX=str(sizes['x']), SizeY=str(sizes['y']),
+        SizeZ=str(sizes['z']), SizeC=str(sizes['c']), SizeT=str(sizes['t']),
+    )
+
+    # channels
+    for ci in range(sizes['c']):
+        SubElement(pixels, "Channel", ID=f"Channel:0:{ci}", SamplesPerPixel="1", Name=f"ch-{ci}")
+
+    # indidual frames
+    frame_index = 0
+    for zi in range(sizes['z']):
+        for ci in range(sizes['c']):
+            tiffdata = SubElement(pixels, 'TiffData')
+            SubElement(tiffdata, 'UUID').text = 'urn:uuid:00000000-0000-0000-0000-000000000000'
+            SubElement(tiffdata, 'PlaneCount').text = '1'
+            SubElement(tiffdata, 'FirstZ').text = str(zi)
+            SubElement(tiffdata, 'FirstC').text = str(ci)
+            SubElement(tiffdata, 'FirstT').text = str(t)
+            frame_index += 1
+
+    return tostring(root, encoding='unicode')
 
 
 
@@ -330,8 +361,8 @@ def correct_tiles(
 
             # generate all output file image frames
             output_frames = []
-            for _plane, zft_img_paths in _group_paths_by(ft_paths, by['p']):
-                for channel, czft_img_paths in _group_paths_by(zft_img_paths, by['ch']):
+            for _plane, zft_img_paths in (ft_by_p := _group_paths_by(ft_paths, by['p'])):
+                for channel, czft_img_paths in (zft_by_ch := _group_paths_by(zft_img_paths, by['ch'])):
                     for orig_image_file_path in czft_img_paths:
                         image = _read_exported_image(orig_image_file_path, **image_info)
                         output_frames.append(
@@ -340,9 +371,15 @@ def correct_tiles(
                         )
 
             # write out all image frame to an output file
+            ome_metadata = _create_tile_ome_metadata(t=timepoint, f=field, sizes={
+                'x': image_shape[0], 'y': image_shape[1],  # CHECK
+                'c': len(zft_by_ch),
+                'z': len(ft_by_p),
+                't': len(image_paths_gby_timepoint)
+            })
             with tifffile.TiffWriter(out_image_file_path) as tiff_writer:
                 for frame in output_frames:
-                    tiff_writer.write(frame, **tiff_writer_opts)
+                    tiff_writer.write(frame, description=ome_metadata, **tiff_writer_opts)
 
 
 
@@ -1072,7 +1109,7 @@ def select_best_focus_planes(
     for z_group_indices in tqdm(nonplane_indices_outer_product, desc=tqdm_desc, **TQDM_STYLE):
         z_group_named_indices = dict(zip(z_group_chunk_names, z_group_indices))
         z_group_image_file_names = [
-            assemble_image_file_name(**(z_group_named_indices | {'plane': p}))
+            assemble_image_file_name(**(z_group_named_indices | {'plane': int(p)}))
             for p in chunk_indices['plane']
         ]
         z_group_image_file_paths = [
@@ -1082,7 +1119,7 @@ def select_best_focus_planes(
         ]
         if z_group_image_file_paths:
             best_focused_source_image_path = __best_focused_image(z_group_image_file_paths)
-            target_image_name = assemble_image_file_name(**(z_group_named_indices | {'plane':'01'}))
+            target_image_name = assemble_image_file_name(**(z_group_named_indices | {'plane': 1}))
             target_image_path = destination_images_folder_path / target_image_name
             target_image_path.symlink_to(best_focused_source_image_path.absolute())
         else:
