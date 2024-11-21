@@ -105,14 +105,14 @@ def determine_fields_layout(
 
 
 def assemble_image_file_name(
-    row: str,
-    column: str,
-    field: str,
-    plane: str,
-    channel: str,
-    timepoint: str,
-    fk: str = '1',
-    fl: str = '1'
+    row: int,
+    column: int,
+    field: int,
+    plane: int,
+    channel: int,
+    timepoint: int,
+    fk: int = 1,
+    fl: int = 1
 ) -> str:
     image_file_name = (
         f"r{row:02d}c{column:02d}f{field:02}p{plane:02d}"
