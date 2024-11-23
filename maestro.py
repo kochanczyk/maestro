@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# pylint: disable=invalid-name,missing-docstring,c-extension-no-member
+# pylint: disable=invalid-name,missing-docstring,c-extension-no-member,too-many-locals
 
 # Licensed under the GPLv3: https://www.gnu.org/licenses/gpl-3.0.html
 # Copyright (c) 2023-2024 Marek Kochańczyk, Paweł Nałęcz-Jawecki, Frederic Grabowski
@@ -38,6 +38,8 @@ archivize
 Type 'python maestro.py COMMAND --help' to learn about COMMAND's arguments and options.
 '''
 
+from __future__ import annotations
+
 import sys
 import shutil
 import string
@@ -53,8 +55,7 @@ from pathlib import Path
 import subprocess as sp
 from multiprocessing import Process, Queue
 import tarfile
-from xml.etree.ElementTree import Element, SubElement, tostring
-from typing import List, Dict, Tuple, Literal
+from typing import TYPE_CHECKING, List, Dict, Tuple, Literal
 
 import psutil
 import yaml
@@ -88,6 +89,10 @@ from operetta import (
     extract_time_interval,
     extract_and_derive_images_layout,
 )
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
 
 COLOR_COMPONENTS = {
     'red':     'R',
@@ -141,11 +146,11 @@ CONVERT_EXE_PATH  , MOGRIFY_EXE_PATH,   XVFB_EXE_PATH  , \
 FIJI_EXE_PATH  , FIJI_SCRIPT_BASE_PATH  , FFMPEG_EXE_PATH
 ])
 
-assert CONVERT_EXE_PATH.exists()
-assert MOGRIFY_EXE_PATH.exists()
-assert FFMPEG_EXE_PATH.exists()
-assert XVFB_EXE_PATH.exists()
-assert FIJI_EXE_PATH.exists()
+assert CONVERT_EXE_PATH.exists(), "ImageMagick's 'covert' not found! Install and/or revise path."
+assert MOGRIFY_EXE_PATH.exists(), "ImageMagick's 'mogrify' not found! Install and/or revise path."
+assert FFMPEG_EXE_PATH.exists(), "ffmpeg not found! Install and/or revise path."
+assert XVFB_EXE_PATH.exists(), "Xvfb not found! Install and/or revise path."
+assert FIJI_EXE_PATH.exists(), "Fiji not found! Install and/or revise path."
 
 
 pd.set_option('display.max_rows', None)
@@ -176,7 +181,7 @@ def _group_paths_by(
 def _prepare_flatfield_correction_images(
     channels_info: pd.DataFrame,
     image_shape: Tuple[int, int],
-) -> Dict[int, np.ndarray]:
+) -> Dict[int, NDArray[np.float64]]:
 
     assert image_shape[0]*image_shape[1] > 1, "Only a stub of an image encountered."
 
@@ -216,7 +221,7 @@ def _read_exported_image(
     image_shape: Tuple[int, int] = (1, 1),
     image_dtype: str = 'uint16',
     n_attempts: int = 2  # work around occasional 'permission denied' from overloaded SMB servers
-) -> np.ndarray:
+) -> NDArray[np.uint16]:
 
     for _attempt_i in range(n_attempts):
         if (image:= cv2.imread(image_file_path, cv2.IMREAD_UNCHANGED)) is not None:
@@ -229,9 +234,9 @@ def _read_exported_image(
 
 
 def _flatfield_corrected(
-    image: np.ndarray,
-    profile_image: np.ndarray,
-) -> np.ndarray:
+    image: NDArray[np.uint16],
+    profile_image: NDArray[np.float64],
+) -> NDArray[np.uint16]:
 
     assert image.dtype == 'uint16', 'Depth of an image subjected to flatfield correction != 16 bit!'
     bit_depth = 16
@@ -244,40 +249,6 @@ def _flatfield_corrected(
 
 
 
-def _create_tile_ome_metadata(t: int, f: int, sizes: Dict[str, int]) -> str:
-
-    root = Element('OME', xmlns='http://www.openmicroscopy.org/Schemas/OME/2016-06')
-
-    image_name = f"Corrected tiles from timepoint: {t} at the original field: {f}"
-    image = SubElement(root, 'Image', ID='Image:0', Name=image_name)
-
-    # dimensions
-    pixels = SubElement(
-        image, 'Pixels', ID="Pixels:0", DimensionOrder="XYCZT", Type="uint16",
-        SizeX=str(sizes['x']), SizeY=str(sizes['y']),
-        SizeZ=str(sizes['z']), SizeC=str(sizes['c']), SizeT=str(sizes['t']),
-    )
-
-    # channels
-    for ci in range(sizes['c']):
-        SubElement(pixels, "Channel", ID=f"Channel:0:{ci}", SamplesPerPixel="1", Name=f"ch-{ci}")
-
-    # indidual frames
-    frame_index = 0
-    for zi in range(sizes['z']):
-        for ci in range(sizes['c']):
-            tiffdata = SubElement(pixels, 'TiffData')
-            SubElement(tiffdata, 'UUID').text = 'urn:uuid:00000000-0000-0000-0000-000000000000'
-            SubElement(tiffdata, 'PlaneCount').text = '1'
-            SubElement(tiffdata, 'FirstZ').text = str(zi)
-            SubElement(tiffdata, 'FirstC').text = str(ci)
-            SubElement(tiffdata, 'FirstT').text = str(t)
-            frame_index += 1
-
-    return tostring(root, encoding='unicode')
-
-
-
 def correct_tiles(
     well_id: str,
     well_loc: WellLocation,
@@ -287,15 +258,10 @@ def correct_tiles(
     tiles_folder_path: Path,
     force: bool = False,
     apply_flatfield_correction: bool = True,
-    compress_output_tiff: bool = False,
+    output_file_compression: Literal['none', 'lzw', 'zip'] = 'none'
 ) -> None:
     '''
-    Result: multiple single-channel images converted to a single multi-page image file.
-
-    Arguments
-    ---------
-    apply_flatfield_correction:
-        If False, the outcome is just a renamed symlink.
+    Multiple single-channel, single-plane images get converted to a single multi-page image files.
     '''
     by = {
         't': r'sk(?P<groupby>[0-9]+)',
@@ -304,8 +270,12 @@ def correct_tiles(
         'ch': r'-ch(?P<groupby>[0-9])',
     }
     tiff_writer_opts = {
-        'photometric': 'minisblack',
-        'compression': 'lzw' if compress_output_tiff else 'none'
+        'photometric': tifffile.PHOTOMETRIC.MINISBLACK, #'minisblack',
+        'compression': {
+            'none': tifffile.COMPRESSION.NONE,
+            'lzw':  tifffile.COMPRESSION.LZW,
+            'zip':  tifffile.COMPRESSION.DEFLATE,
+        }[output_file_compression],
     }
 
     tiles_folder_path.mkdir(exist_ok=True, parents=True)
@@ -328,7 +298,7 @@ def correct_tiles(
         is_correcting_prefix = 'non-'
 
     # process all exported files for a current weel
-    # order of loops: T -> position -> Z -> C -> XY; nominally, DimensionsOrder is XYCZT
+    # order of loops: T --> position --> Z --> C --> XY; nominally, DimensionOrder is XYCZT
     image_paths_gby_timepoint = _group_paths_by(well_orig_image_files_paths, by['t'])
     t_collection = \
         tqdm(
@@ -370,16 +340,26 @@ def correct_tiles(
                             if apply_flatfield_correction else image
                         )
 
+            # prepare output file OME metadata
+            ome_xml = tifffile.OmeXml()
+            extra_metadata = {
+                'Channel': {'Name': list(channels_info['Observable'])},
+            }
+            ome_xml.addimage(
+                name = f"Corrected tiles from timepoint: {timepoint}, field: {field}",
+                dtype=image_dtype,
+                shape=(len(ft_by_p), len(zft_by_ch), image_shape[1], image_shape[0]),
+                storedshape=(len(ft_by_p) * len(zft_by_ch), 1, 1, image_shape[1], image_shape[0], 1),
+                axes='ZCYX',
+                **extra_metadata
+             )
+            description = ome_xml.tostring()
+
             # write out all image frame to an output file
-            ome_metadata = _create_tile_ome_metadata(t=timepoint, f=field, sizes={
-                'x': image_shape[0], 'y': image_shape[1],  # CHECK
-                'c': len(zft_by_ch),
-                'z': len(ft_by_p),
-                't': len(image_paths_gby_timepoint)
-            })
-            with tifffile.TiffWriter(out_image_file_path) as tiff_writer:
+            with tifffile.TiffWriter(out_image_file_path, ome=False) as tiff_writer:
                 for frame in output_frames:
-                    tiff_writer.write(frame, description=ome_metadata, **tiff_writer_opts)
+                    tiff_writer.write(frame, description=description, **tiff_writer_opts)
+                    description = None
 
 
 
@@ -453,7 +433,7 @@ def stitch_tiles(
     tile_overlap: float,
     force: bool = False,
     downscale: bool = False,
-    compress_output_tiff: bool = True,  # non-compressed better zippable externally thou
+    output_tiff_compression: Literal['none', 'lzw', 'zip'] = 'lzw',
     require_no_zero_pixels_in_output_image: bool = True,
     zero_pixels_in_output_image_retries_count: int = 5,
     same_zero_pixels_counts_consecutively_for_early_exit: int = 2,
@@ -557,9 +537,9 @@ def stitch_tiles(
                             break
                         continue  # retry
 
-        if compress_output_tiff:
+        if output_tiff_compression != 'none':
             dst_file_path_s = str(dst_file_path.absolute())
-            cmd = [CONVERT_EXE_PATH_S, dst_file_path_s, '-compress', 'zip', dst_file_path_s]
+            cmd = [MOGRIFY_EXE_PATH_S, '-compress', output_tiff_compression, dst_file_path_s]
             sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True)
 
 
@@ -924,12 +904,13 @@ def _place_image_files_in_their_respective_well_folders(
 ) -> List[Path]:
 
     images_folder_path = Path(images_folder)
-    assert images_folder_path.exists(), \
-        f"Error: The source folder '{images_folder_path.absolute()}' does not exist!"
+    if not images_folder_path.exists():
+        print(f"Error: The source folder '{images_folder_path.absolute()}' does not exist!")
+        return []
 
     if images_folder_path.resolve().name != EXPORTED_IMAGES_SUBFOLDER_NAME:
-        print("Error: The argument OPERETTA_IMAGES_FOLDER_PATH "
-              f"should point to a folder named '{EXPORTED_IMAGES_SUBFOLDER_NAME}'!")
+        print("Error: The images folder argument should point to a folder named "
+              f"'{EXPORTED_IMAGES_SUBFOLDER_NAME}'!")
         return []
 
     # the index file is not required currently, but lack thereof is perceived suspicious
@@ -945,7 +926,7 @@ def _place_image_files_in_their_respective_well_folders(
     image_files_paths = [
         file_path for file_path in files_paths
         if EXPORTED_IMAGE_FILE_NAME_RE.match(
-            re.sub('.orig$', '', file_path.name)   # accepting both '*.tiff' and '*.tiff.orig'
+            re.sub('.orig$', '', file_path.name)  # accepting both '*.tiff' and '*.tiff.orig'
         )
     ]
 
@@ -1562,7 +1543,7 @@ def remaster(
         annotation_font_size = int(config['Annotations']['font_size'].replace('pt', ''))
     else:
         annotation_font_size = TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE
-        print("Info: Assumed default text annotation font size: "
+        print("Info: Assumed the default text annotation font size: "
               f"{TEXT_ANNOTATIONS_DEFAULT_FONT_SIZE} pt.")
 
 

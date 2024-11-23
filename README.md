@@ -97,7 +97,7 @@ The optimal Z slice selection algorithm finds the Z, at which a laplacian-transf
 
 ### Image processing
 
-By default, images from all the plate wells are processed. You may however select only a subset of wells. To this end, use `--well` _WELL_SPEC_, where _WELL_SPEC_ is either a list of comma-separated well IDs (e.g., `--well 0202,0203,0204`) or a regular expression (e.g., `--well 020[234]`).
+By default, images from all the plate wells are processed. You may however select only a subset of wells. To this end, use `--well WELL_SPEC`, where WELL_SPEC  is either a list of comma-separated well IDs (as in, e.g., `--well 0202,0203,0204`) or a regular expression (as in, e.g., `--well 020[234]`).
 
 
 #### Step 1: Export &rarr; Tiles (flat-field correction)
@@ -120,7 +120,7 @@ The value of the tile-over-tile overlap needs to be given in the configuration f
 
 Stitches retain the channel order of tiles.
 
-As stitches may be an alternative manner of long-term data storage, they are ZIP-compressed internally.
+Note that stitches may be an alternative data layout for long-term data storage.
 
 Stitches may be downsized to 50% of the original (exported) image size, meaning that both dimensions are halved. The optional downscaling is controlled with a True/False switch in the config file, in section Stitching.
 
