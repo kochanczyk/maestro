@@ -124,6 +124,8 @@ Note that stitches may be an alternative data layout for long-term data storage.
 
 Stitches may be downsized to 50% of the original (exported) image size, meaning that both dimensions are halved. The optional downscaling is controlled with a True/False switch in the config file, in section Stitching.
 
+In the same section, it is possible to choose the `compression` algorithm for output TIFFs: `none` (largest files), `LZW` (medium-sized files, compression is quick), or `deflate` (smallest file size, but compression is time-consuming). Please note that all the methods are loseless.
+
 If an output stitched image file exists, it is not re-generated and overwritten until the option `--force-stitch` is passed.
 
 If tiles should be removed after assembling a stitched image, use option `--remove-intermediates` (note: setting this option also affects remixing, see below).
@@ -178,6 +180,7 @@ Observables:
 Stitching:
     downscale:     False
     tile_overlap:  0%
+    compression:   deflate
 
 Normalization:
     dapi:    -670, *1.1

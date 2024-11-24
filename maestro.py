@@ -269,13 +269,14 @@ def correct_tiles(
         'p': r'p(?P<groupby>[0-9]+)',
         'ch': r'-ch(?P<groupby>[0-9])',
     }
-    tiff_writer_opts = {
-        'photometric': tifffile.PHOTOMETRIC.MINISBLACK, #'minisblack',
+    tiff_write_opts = {
+        'photometric': tifffile.PHOTOMETRIC.MINISBLACK,
         'compression': {
             'none': tifffile.COMPRESSION.NONE,
             'lzw':  tifffile.COMPRESSION.LZW,
             'zip':  tifffile.COMPRESSION.DEFLATE,
         }[output_file_compression],
+        'software': 'https://github.com/kochanczyk/maestro',
     }
 
     tiles_folder_path.mkdir(exist_ok=True, parents=True)
@@ -345,11 +346,12 @@ def correct_tiles(
             extra_metadata = {
                 'Channel': {'Name': list(channels_info['Observable'])},
             }
+            nz, nch, ny, nx = len(ft_by_p), len(zft_by_ch), image_shape[0], image_shape[1]
             ome_xml.addimage(
                 name = f"Corrected tiles from timepoint: {timepoint}, field: {field}",
                 dtype=image_dtype,
-                shape=(len(ft_by_p), len(zft_by_ch), image_shape[1], image_shape[0]),
-                storedshape=(len(ft_by_p) * len(zft_by_ch), 1, 1, image_shape[1], image_shape[0], 1),
+                shape=(nz, nch, ny, nx),
+                storedshape=(nz*nch, 1, 1, ny, nx, 1),
                 axes='ZCYX',
                 **extra_metadata
              )
@@ -358,7 +360,7 @@ def correct_tiles(
             # write out all image frame to an output file
             with tifffile.TiffWriter(out_image_file_path, ome=False) as tiff_writer:
                 for frame in output_frames:
-                    tiff_writer.write(frame, description=description, **tiff_writer_opts)
+                    tiff_writer.write(frame, description=description, **tiff_write_opts)
                     description = None
 
 
@@ -406,7 +408,12 @@ def _generate_fiji_stitching_script(script_file_path, **kwargs) -> None:
             selectWindow("FusedDown");
         }
 
-        saveAs("Tiff", "${STITCHES_FOLDER}/Img_" + ts + ".tif");  // uncompressed
+        // uncompressed by default; does not save OME metadata
+        //saveAs("Tiff", "${STITCHES_FOLDER}/Img_" + ts + ".tif");
+
+        // Bio-Formats has very inefficient compressors (names: LZW, zlib)
+        run("Bio-Formats Exporter", "save=[${STITCHES_FOLDER}/Img_" + ts + ".ome.tif] compression=Uncompressed");
+        File.rename("${STITCHES_FOLDER}/Img_" + ts + ".ome.tif", "${STITCHES_FOLDER}/Img_" + ts + ".tif");
 
         if (${DOWNSCALE}) {
             close("FusedDown");
@@ -431,9 +438,9 @@ def stitch_tiles(
     tiles_folder_path: Path,
     stitches_folder_path: Path,
     tile_overlap: float,
-    force: bool = False,
+    compression: Literal['none', 'lzw', 'deflate'],
     downscale: bool = False,
-    output_tiff_compression: Literal['none', 'lzw', 'zip'] = 'lzw',
+    force: bool = False,
     require_no_zero_pixels_in_output_image: bool = True,
     zero_pixels_in_output_image_retries_count: int = 5,
     same_zero_pixels_counts_consecutively_for_early_exit: int = 2,
@@ -442,6 +449,7 @@ def stitch_tiles(
     assert tiles_folder_path.exists(), \
         f"Tiles folder '{tiles_folder_path.absolute()}' does not exist!"
     assert tiles_folder_path.is_dir()
+    assert compression.lower() in ['none', 'lzw', 'deflate']
 
     stitches_folder_path.mkdir(exist_ok=True, parents=True)
 
@@ -507,6 +515,7 @@ def stitch_tiles(
                 )
 
                 try:
+                    # When using the ImageJ's `--headless` flag, the Bio-Formats Exporter fails.
                     cmd = [
                         XVFB_EXE_PATH_S, '--auto-servernum', f"--server-num={xvfb_server_num}",
                         FIJI_EXE_PATH_S, '-macro', fiji_script_path_s
@@ -525,21 +534,27 @@ def stitch_tiles(
                 Path(fiji_script_path_s).unlink()
 
                 if require_no_zero_pixels_in_output_image:
-                    dst_file_path_s = str(dst_file_path.absolute())
-                    reading_ok, dst_img = cv2.imreadmulti(dst_file_path_s,
-                                                          flags=cv2.IMREAD_UNCHANGED)
+                    reading_ok, dst_img = cv2.imreadmulti(dst_file_path, flags=cv2.IMREAD_UNCHANGED)
                     assert reading_ok
                     assert len(dst_img) > 0
-                    if (zero_pixel_count := sum(sum(dst_img).ravel() == 0)) > 0:
-                        zero_pixel_counts.append(zero_pixel_count)
-                        z = same_zero_pixels_counts_consecutively_for_early_exit
-                        if len(zero_pixel_counts) >= z and len(set(zero_pixel_counts[-z:])) == 1:
-                            break
-                        continue  # retry
+                    zero_pixel_count = \
+                        np.sum(dst_img == 0) if len(dst_img) == 1 else \
+                        sum(np.sum(frame) == 0 for frame in dst_img)
+                    if zero_pixel_count == 0:
+                        break
+                    zero_pixel_counts.append(zero_pixel_count)
+                    z = same_zero_pixels_counts_consecutively_for_early_exit
+                    if len(zero_pixel_counts) >= z and len(set(zero_pixel_counts[-z:])) == 1:
+                        break
+                else:
+                    break
 
-        if output_tiff_compression != 'none':
+        # ImageMagick's delfate compression is more efficient compared to the Bio-Formats Exporter
+        if compression != 'none':
+            if compression.lower() in ['deflate', 'zip', 'zlib']:
+                compression = 'zip'
             dst_file_path_s = str(dst_file_path.absolute())
-            cmd = [MOGRIFY_EXE_PATH_S, '-compress', output_tiff_compression, dst_file_path_s]
+            cmd = [MOGRIFY_EXE_PATH_S, '-compress', compression, dst_file_path_s]
             sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.DEVNULL, check=True)
 
 
@@ -1525,6 +1540,8 @@ def remaster(
             if 'tile_overlap' in config['Stitching'] else 0.5
     stitching_downscale = config['Stitching']['downscale'] \
             if 'downscale' in config['Stitching'] else False
+    stitching_compression = config['Stitching']['compression'] \
+            if 'compression' in config['Stitching'] else 'deflate'
 
     # remixing settings
     remixing_downscale = config['Remixes']['downscale'] \
@@ -1626,8 +1643,9 @@ def remaster(
                 well_tiles_folder_path,
                 well_stitches_folder_path,
                 tile_overlap=stitching_tile_overlap,
+                compression=stitching_compression,
                 downscale=stitching_downscale,
-                force=force_stitch
+                force=force_stitch,
             )
             if remove_intermediates:
                 shutil.rmtree(well_tiles_folder_path, ignore_errors=True)
