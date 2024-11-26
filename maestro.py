@@ -66,7 +66,7 @@ from tqdm import tqdm
 import tifffile
 import cv2
 
-from operetta import (
+from harmony_export import (
     EXPORTED_IMAGES_SUBFOLDER_NAME,
     EXPORTED_IMAGE_FILE_NAME_RE,
     EXPORTED_IMAGE_FILE_NAME_EXTENSION,
@@ -146,11 +146,11 @@ CONVERT_EXE_PATH  , MOGRIFY_EXE_PATH,   XVFB_EXE_PATH  , \
 FIJI_EXE_PATH  , FIJI_SCRIPT_BASE_PATH  , FFMPEG_EXE_PATH
 ])
 
-assert CONVERT_EXE_PATH.exists(), "ImageMagick's 'covert' not found! Install and/or revise path."
-assert MOGRIFY_EXE_PATH.exists(), "ImageMagick's 'mogrify' not found! Install and/or revise path."
-assert FFMPEG_EXE_PATH.exists(), "ffmpeg not found! Install and/or revise path."
-assert XVFB_EXE_PATH.exists(), "Xvfb not found! Install and/or revise path."
-assert FIJI_EXE_PATH.exists(), "Fiji not found! Install and/or revise path."
+assert CONVERT_EXE_PATH.exists(), "ImageMagick's 'convert' not found! Install IM or fix the path."
+assert MOGRIFY_EXE_PATH.exists(), "ImageMagick's 'mogrify' not found! Install IM or fix the path."
+assert FFMPEG_EXE_PATH.exists(), "ffmpeg not found! Install ffmpeg or fix the path."
+assert XVFB_EXE_PATH.exists(), "Xvfb not found! Install xvfb-run or fix the path."
+assert FIJI_EXE_PATH.exists(), "Fiji not found! Install Fiji.app or fix the path."
 
 
 pd.set_option('display.max_rows', None)
@@ -276,7 +276,7 @@ def correct_tiles(
             'lzw':  tifffile.COMPRESSION.LZW,
             'zip':  tifffile.COMPRESSION.DEFLATE,
         }[output_file_compression],
-        'software': 'https://github.com/kochanczyk/maestro',
+        'software': 'tifffile.py/maestro',
     }
 
     tiles_folder_path.mkdir(exist_ok=True, parents=True)
@@ -539,7 +539,7 @@ def stitch_tiles(
                     assert len(dst_img) > 0
                     zero_pixel_count = \
                         np.sum(dst_img == 0) if len(dst_img) == 1 else \
-                        sum(np.sum(frame) == 0 for frame in dst_img)
+                        sum(np.sum(frame == 0) for frame in dst_img)
                     if zero_pixel_count == 0:
                         break
                     zero_pixel_counts.append(zero_pixel_count)
