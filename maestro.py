@@ -277,6 +277,7 @@ def correct_tiles(
             'zip':  tifffile.COMPRESSION.DEFLATE,
         }[output_file_compression],
         'software': 'tifffile.py/maestro',
+        'metadata': None
     }
 
     tiles_folder_path.mkdir(exist_ok=True, parents=True)
@@ -337,7 +338,7 @@ def correct_tiles(
                     for orig_image_file_path in czft_img_paths:
                         image = _read_exported_image(orig_image_file_path, **image_info)
                         output_frames.append(
-                            _flatfield_corrected(image, ffc_profile_images[channel]) \
+                            _flatfield_corrected(image, ffc_profile_images[channel])
                             if apply_flatfield_correction else image
                         )
 
