@@ -277,7 +277,7 @@ def correct_tiles(
             'zip':  tifffile.COMPRESSION.DEFLATE,
         }[output_file_compression],
         'software': 'tifffile.py/maestro',
-        'metadata': None
+        'metadata': None,
     }
 
     tiles_folder_path.mkdir(exist_ok=True, parents=True)
@@ -354,7 +354,7 @@ def correct_tiles(
                 shape=(nz, nch, ny, nx),
                 storedshape=(nz*nch, 1, 1, ny, nx, 1),
                 axes='ZCYX',
-                **extra_metadata
+                **extra_metadata,
              )
             description = ome_xml.tostring()
 
